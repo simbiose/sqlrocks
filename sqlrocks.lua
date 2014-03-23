@@ -132,7 +132,7 @@ local function args2array(args)
     local results = split(',', args[1], true)
     for i=1, #results do results[i] = trim(results[i]) end
     return results
-  elseif 'table' == type(args[1]) then
+  elseif 'table' == type(args[1]) and #args==1 then --then
     return args[1]
   else
     return args
@@ -209,24 +209,8 @@ local function is_expr(e)
     e:is(In) or e:is(Like) or e:is(Between) or e:is(Exists))
 end
 
--- TODO: refactor
-local function quote_reserved_column(expr)
-  local prefix, suffix, mark = '', '', find(expr, '.', 1, true)
-  if mark > -1 then
-    prefix, expr = sub(expr, 1, mark), sub(expr, mark + 1, -1)
-  end
-  mark = find(expr, ' ', 1 , true)
-  if mark > -1 then
-    suffix, expr = sub(expr, mark, -1), sub(expr, 1, mark - 1)
-  end
-  if reserved[lower(expr)] then
-    expr = format('"%s"', expr)
-  end
-  return prefix .. expr .. suffix
-end
-
 local function handle_value(val, opts)
-  ppx(' handle value ', type(val) .. (('table' == type(val) and rawget(val, '__name')) and ':'..rawget(val, '__name') or ''), val, opts)
+  ppx(' handle value ', type(val) .. (('table' == type(val) and rawget(val, '__name')) and ':'..rawget(val, '__name') or ''), opts)
   local _type = type(val)
   if 'table' == _type and val.is then
     if val:is(Statement) then return format('(%s)', val:_toString(opts)) end
@@ -251,14 +235,21 @@ local function handle_value(val, opts)
 end
 
 local function handle_column(expr, opts)
-  ppx(' handle column ', type(expr) .. (('table' == type(expr) and rawget(expr, '__name')) and ':'..rawget(expr, '__name') or ''), opts)
+  ppx(' handle column ', type(expr) .. (('table' == type(expr) and rawget(expr, '__name')) and ':'..rawget(expr, '__name') or ''), expr, opts)
   if expr.is then
     if expr:is(Statement) then return format('(%s)', expr:_toString(opts)) end
     if expr:is(Val) then return handle_value(expr.val, opts) end
   end
 
-  if match(expr, "[%w%_%.%d]+( AS [%w%d%_]+)?") then
-    return quote_reserved_column(expr)
+  local prefix, dot, field, alias =
+    match(expr, '^([%w%_%-]+)(%.*)([%w%_%d%-]*)%s?[aA]?[sS]?%s?([%w%d%_%-]*)')
+  if prefix then
+    if field == '' and prefix ~= '' then field = prefix prefix = '' end
+    return format(
+        "%s%s%s%s%s", prefix, dot, 
+        (reserved[lower(field)] and format('"%s"', field) or field),
+        (alias == "" and alias or " AS "), alias
+      )
   end
   return expr
 end
@@ -371,13 +362,12 @@ local function geAll(col, val)    return Binary('>=', col, val, 'ALL ') end
 local function geAny(col, val)    return Binary('>=', col, val, 'ANY ') end
 local function into(self, tbl)     self._into = tbl return self end
 local function intoTemp(self, tbl) self._into_tmp = true return self:into(tbl) end
-local function forUpdate(...)
+local function forUpdate(self, ...)
   self.for_update = true
   return self:_addListArgs({...}, 'for_update_tbls')
 end
 
 local function obj2equals(obj, expressions)
-  --ppx(obj, 'obj2equals')
   for key in pairs(obj) do
     expressions[#expressions + 1] = eq(key, obj[key])
   end
@@ -540,15 +530,14 @@ function Select:crossJoin(...)
   return self:_addJoins({...}, 'CROSS')
 end
 
-function Select:on(on, ...)
-  local last_join = self.joins[#self.joins - 1]
+function Select:on(...)
+  local on = ...
+  local last_join, arr = self.joins[#self.joins]
   if is_expr(on) then
     last_join.on = on
   else
-    if not last_join.on then
-      last_join.on = {}
-    end
-    extend(last_join.on, args2object(...))
+    last_join.on = last_join.on or {}
+    extend(last_join.on, args2object({...}))
   end
   return self
 end
@@ -660,9 +649,8 @@ function Select:_toString(opts)
   if self._distinct then res[#res + 1] = 'DISTINCT ' end
   handles(res, cols, opts)
   if self._into then
-    res[#res + 1] = 'INTO '
-    if self._into_temp then res[#res + 1] = 'TEMP ' end
-    res[#res + 1] = self._into .. ' '
+    res[#res + 1] =
+      format('INTO %s%s ', (self._into_tmp and 'TEMP ' or ''), self._into)
   end
   if self.tbls then
     res[#res + 1] = format('FROM %s ', concat(self.tbls, ', '))
@@ -681,7 +669,7 @@ function Select:_toString(opts)
   if self._having then
     res[#res + 1] = format('HAVING %s', self:_exprToString(opts, self._having))
   end
-  if self._order_by then
+  if self.order_by then
     res[#res + 1] = 'ORDER BY ' handles(res, self.order_by, opts)
   end
   if self._limit then
@@ -695,11 +683,11 @@ function Select:_toString(opts)
     local stmt = self['_' .. key]
     if stmt then
       ppx(#stmt, ' -- ')
-      res[#res + 1] = value .. ' '
-      for i=1, #stmt do
-        res[#res + 1] = stmt[i]:_toString(opts) .. (i == #stmt and ' ' or ' ' .. value .. ' ')
-        --res[#res + 1] = stmt[i] .. opts .. (i == #stmt and ' ' or ' ' .. value .. ' ')
+      res[#res + 1] = value res[#res + 1] = ' '
+      for i=1, (#stmt - 1) do
+        res[#res + 1] = format('%s %s ', stmt[i]:_toString(opts), value)
       end
+      res[#res + 1] = stmt[#stmt]:_toString(opts) res[#res + 1] = ' '
     end
   end
 
@@ -756,6 +744,7 @@ function Insert:into(tbl, ...)
       self:values(...)
     end
   end
+  return self
 end
 function Insert:values(...)
   local values = args2array({...})
@@ -969,6 +958,7 @@ function Join:__concat(opts)
   if is_expr(on) then
     on = on .. opts
   else
+    ppx(on)
     for key, val in pairs(on) do
       result[#result + 1] =
         format('%s = %s', handle_column(key, opts), handle_column(val, opts))
@@ -990,7 +980,6 @@ function Join:__tostring() return self:__concat({}) end
 
 function Group:__init(op, expressions)
   self.op, self.expressions = op, {}
-  ppx(' group ', op, expressions, #expressions)
   for k in pairs(expressions) do
     if is_expr(expressions[k]) then
       self.expressions[#self.expressions + 1] = expressions[k]
@@ -998,6 +987,7 @@ function Group:__init(op, expressions)
       obj2equals(expressions[k], self.expressions)
     end
   end
+  ppx(' group ', op, #self.expressions)
 end
 
 function Group:clone()
@@ -1006,12 +996,12 @@ end
 
 function Group:__concat(opts)
   local res = {}
-  pp(' group __concat ', res, self.expressions, opts, #self.expressions)
+  ppx(' -- group concat --')
   for k in pairs(self.expressions) do
     res[#res + 1] = format("%s %s ", (self.expressions[k] .. opts), self.op)
   end
   res[#res] = sub(res[#res], 1, (#self.op + 3) * -1)
-  if #self.expressions > 1 and self.parens then
+  if #self.expressions > 1 and (self.parens or self.parens == nil) then
     return format("(%s)", concat(res))
   end
   return concat(res)
@@ -1026,7 +1016,7 @@ function Group:__tostring() return self:__concat({}) end
 --
 
 function Not:__init(expr)
-  self.expressions = (is_expr(expr) and {_and(expr)} or {expr})
+  self.expressions = is_expr(expr) and {expr} or {_and({expr})}
 end
 
 function Not:clone()
@@ -1034,6 +1024,7 @@ function Not:clone()
 end
 
 function Not:__concat(opts)
+  ppx(self.expressions)
   return format('NOT %s', self.expressions[1] .. opts)
 end
 
@@ -1079,14 +1070,33 @@ end
 
 function Like:__concat(opts)
   return format(
-      '%s LIKE %s%s',
-      handle_column(self.col, opts),
-      handle_value(self.val, opts),
+      '%s LIKE %s%s', handle_column(self.col, opts), handle_value(self.val, opts),
       (self.escape_char and format(" ESCAPE '%s'", self.escape_char) or '')
     )
 end
 
 function Like:__tostring() return self:__concat({}) end
+
+--
+--
+--
+--
+--
+
+function Between:__init(col, val1, val2)
+  self.col, self.val1, self.val2 = col, val1, val2
+end
+
+function Between:clone()
+  return Between(self.col, self.val1, self.val2)
+end
+
+function Between:__concat(opts)
+  return format('%s BETWEEN %s AND %s', handle_column(self.col, opts),
+    handle_value(self.val1, opts), handle_value(self.val2, opts))
+end
+
+function Between:__tostring() return self:__concat({}) end
 
 --
 --
@@ -1114,8 +1124,9 @@ function Unary:__tostring() return self:__concat({}) end
 --
 --
 
-function In:__init(col, list)
-  self.col, self.list = col, list
+function In:__init(col, ...)
+  self.col, self.list = col, ...
+  self.list = 'table' ~= type(self.list) and {...} or self.list
 end
 
 function In:clone()
@@ -1130,7 +1141,7 @@ function In:__concat(opts)
     res = self.list:_toString(opts)
   end
 
-  return format('%s IN (%s)', handle_column(self.col, opts), res)
+  return format('%s IN (%s)', handle_column(self.col, opts), trim(res))
 end
 
 function In:__tostring() return self:__concat({}) end
@@ -1150,7 +1161,7 @@ function Exists:clone()
 end
 
 function Exists:__concat(opts)
-  return format('EXISTS (%s)', self.subquery._toString(opts))
+  return format('EXISTS (%s)', self.subquery:_toString(opts))
 end
 
 function Exists:__tostring() return self:__concat({}) end
@@ -1190,12 +1201,13 @@ function SQLRocks:__call(_expansions, _criteria, _views)
     ('table'    == type(_views)      and _views      or {}),
     {
       val       = Val,       sql    = Sql,    _and     = _and,     _or    = _or,
-      _not      = _not,      like   = Like,   between  = Between,  isNull = isNull,
+      _not      = Not,       like   = Like,   between  = Between,  isNull = isNull,
       isNotNull = isNotNull, exists = Exists, eq       = eq,       eqAll  = eqAll,
       eqAny     = eqAny,     notEq  = notEq,  notEqAll = notEqAll, ltAny  = ltAny,
       notEqAny  = notEqAn,   lt     = lt,     ltAll    = ltAll,    le     = le,
       leAll     = leAll,     leAny  = leAny,  gt       = gt,       gtAll  = gtAll,
-      gtAny     = gtAny,     ge     = ge,     geAll    = geAll,    geAny  = geAny
+      gtAny     = gtAny,     ge     = ge,     geAll    = geAll,    geAny  = geAny,
+      _in       = In
     }
 
   this.addView = function(name, sel)

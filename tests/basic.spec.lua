@@ -25,12 +25,14 @@ local function extended_same(state, arguments) --compare_to, ...)
   local compare_to = arguments[1] remove(arguments, 1)
   local size_of    = #arguments
   if size_of == 1 or 'string' ~= type(compare_to) then
+    print(' ??? ')
     return state.mod == (compare_to == arguments[1])
   else
     local ok = 1
     for i=1, size_of do
       ok = (compare_to == arguments[i] and i or ok)
     end
+    print(compare_to, arguments[ok])
     return state.mod == (compare_to == arguments[ok])
   end  
 end
@@ -68,6 +70,48 @@ assert:register("assertion", "params", check_params)
 
 describe('basic', function()
   describe('sql select', function()
+    it('should handle an array, foda', function()
+      assert.are.same(tostring(select({'one', 'order'}):from('user')),
+        'SELECT one, "order" FROM user')
+    end)
+
+    it('should handle multiple args, foda', function()
+      assert.are.same(tostring(select('one', 'order'):from('user')),
+        'SELECT one, "order" FROM user')
+    end)
+
+    it('should default to *', function()
+      assert.are.same(tostring(select():from('user')),
+        'SELECT * FROM user')
+    end)
+
+    it('should handle a comma-delimited str', function()
+      assert.are.same(tostring(select('one, order'):from('user')),
+        'SELECT one, "order" FROM user')
+    end)
+
+    it('should handle being called multiple times', function()
+      assert.are.same(tostring(select('one, order'):select({'two', 'desc'})
+        :select('three', 'four'):from('user')),
+        'SELECT one, "order", two, "desc", three, four FROM user')
+    end)
+
+    it('should support DISTINCT', function()
+      assert.are.same(tostring(select('one, order')
+        :distinct('two, desc'):from('user')),
+        'SELECT DISTINCT one, "order", two, "desc" FROM user')
+    end)
+
+    it('should support FOR UPDATE', function()
+      assert.are.same(tostring(select():from('user'):forUpdate('user')),
+        'SELECT * FROM user FOR UPDATE user')
+    end)
+
+    it('should support FOR UPDATE ... NO WAIT', function()
+      assert.are.same(tostring(select():from('user'):forUpdateOf('user'):noWait()),
+        'SELECT * FROM user FOR UPDATE user NO WAIT')
+    end)
+
     it('select from table', function()
       res = select():from('users')
       assert.are.same(tostring(res), "SELECT * FROM users")
@@ -107,6 +151,52 @@ describe('basic', function()
       )
     end)
   end)
+
+  describe('.from()', function()
+    it('should handle an array', function()
+      assert.are.same(tostring(select():from({'one', 'two', 'usr'})),
+        'SELECT * FROM one, two, user usr')
+    end)
+
+    it('should handle multiple args', function()
+      assert.are.same(tostring(select():from('one', 'two', 'usr')),
+        'SELECT * FROM one, two, user usr')
+    end)
+
+    it('should handle a comma-delimited string', function()
+      assert.are.same(tostring(select():from('one, two, usr')),
+        'SELECT * FROM one, two, user usr')
+    end)
+
+    it('should handle being called multiple times', function()
+      assert.are.same(tostring(select():from('one', 'usr')
+        :from({'two', 'psn'}):from('three, addr')),
+        'SELECT * FROM one, user usr, two, person psn, three, address addr')
+    end)
+  end)
+
+  describe('select().into() should insert into a new table', function()
+    it('.into()', function()
+      assert.are.same(tostring(select():into('new_user'):from('user')),
+        'SELECT * INTO new_user FROM user')
+    end)
+
+    it('.intoTable()', function()
+      assert.are.same(tostring(select():intoTable('new_user'):from('user')),
+        'SELECT * INTO new_user FROM user')
+    end)
+
+    it('intoTemp()', function()
+      assert.are.same(tostring(select():intoTemp('new_user'):from('user')),
+        'SELECT * INTO TEMP new_user FROM user')
+    end)
+
+    it('intoTempTable()', function()
+      assert.are.same(tostring(select():intoTempTable('new_user'):from('user')),
+        'SELECT * INTO TEMP new_user FROM user')
+    end)
+  end)
+
 
   describe('sql update', function()
     it('should generate an update statement', function()
@@ -356,6 +446,328 @@ describe('basic', function()
       ' UNION SELECT * FROM user usr WHERE name = $3',
       {'Roy', 'Moss', 'The elders of the internet'}
     )
+  end)
+
+  describe('insert():into() should insert into a preexisting table', function()
+    it('insert():into():select()', function()
+      assert.are.same(tostring(insert():into('new_user', 'id', 'addr_id')
+        :select('id', 'addr_id'):from('user')),
+        'INSERT INTO new_user (id, addr_id) SELECT id, addr_id FROM user')
+    end)
+
+    it('insert():select()', function()
+      assert.are.same(tostring(insert('new_user', 'id', 'addr_id')
+        :select('id', 'addr_id'):from('user')),
+        'INSERT INTO new_user (id, addr_id) SELECT id, addr_id FROM user')
+    end)
+  end)
+
+  describe('GROUP BY clause', function()
+    it('should support single group by', function()
+      assert.are.same(tostring(select():from('user'):groupBy('last_name')),
+        'SELECT * FROM user GROUP BY last_name')
+    end)
+
+    it('should support multiple groupBy() args w/ reserved words quoted', function()
+      assert.are.same(tostring(select():from('user'):groupBy('last_name', 'order')),
+        'SELECT * FROM user GROUP BY last_name, "order"')
+    end)
+
+    it('should support :groupBy():groupBy()', function()
+      assert.are.same(tostring(select():from('user')
+        :groupBy('last_name'):groupBy('order')),
+        'SELECT * FROM user GROUP BY last_name, "order"')
+    end)
+
+    it('should support an array', function()
+      assert.are.same(tostring(select():from('user'):groupBy({'last_name', 'order'})),
+        'SELECT * FROM user GROUP BY last_name, "order"')
+    end)
+  end)
+
+  describe(':order() / :orderBy()', function()
+    it('should support .orderBy(arg1, arg2)', function()
+      assert.are.same(tostring(select():from('user'):orderBy('last_name', 'order')),
+        'SELECT * FROM user ORDER BY last_name, "order"')
+    end)
+
+    it('should support an array', function()
+      assert.are.same(tostring(select():from('user'):orderBy({'last_name', 'order'})),
+        'SELECT * FROM user ORDER BY last_name, "order"')
+    end)
+
+    it('should support being called multiple times', function()
+      assert.are.same(tostring(select():from('user')
+        :orderBy('last_name'):orderBy('order')),
+        'SELECT * FROM user ORDER BY last_name, "order"')
+    end)
+  end)
+
+  describe('joins', function()
+    it(':join() should accept a comma-delimited string', function()
+      assert.are.same(tostring(select():from('usr'):join('psn, addr')),
+        'SELECT * FROM user usr ' ..
+        'INNER JOIN person psn ON usr.psn_fk = psn.pk ' ..
+        'INNER JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':leftJoin() should generate a left join', function()
+      assert.are.same(tostring(select():from('usr'):leftJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'LEFT JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':leftOuterJoin() should generate a left join', function()
+      assert.are.same(tostring(select():from('usr'):leftOuterJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'LEFT JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':rightJoin() should generate a right join', function()
+      assert.are.same(tostring(select():from('usr'):rightJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'RIGHT JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':rightOuterJoin() should generate a right join', function()
+      assert.are.same(tostring(select():from('usr'):rightOuterJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'RIGHT JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':fullJoin() should generate a full join', function()
+      assert.are.same(tostring(select():from('usr'):fullJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'FULL JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':fullOuterJoin() should generate a full join', function()
+      assert.are.same(tostring(select():from('usr'):fullOuterJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'FULL JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':crossJoin() should generate a cross join', function()
+      assert.are.same(tostring(select():from('usr'):crossJoin('addr')),
+        'SELECT * FROM user usr ' ..
+        'CROSS JOIN address addr ON usr.addr_fk = addr.pk')
+    end)
+
+    it(':join() should accept an expression for the on argument', function()
+      assert.are.same(tostring(select():from('usr')
+        :join('addr', eq('usr.addr_id', sql('addr.id')))),
+        'SELECT * FROM user usr INNER JOIN address addr ON usr.addr_id = addr.id')
+    end)
+  end)
+
+  describe(':on()', function()
+    it('should accept an object literal', function()
+      assert.are.same(tostring(select():from('usr'):join('addr')
+        :on({['usr.addr_id']='addr.id'})),
+        'SELECT * FROM user usr ' ..
+        'INNER JOIN address addr ON usr.addr_id = addr.id')
+    end)
+
+    it('should accept a (key, value) pair', function()
+      assert.are.same(tostring(select():from('usr'):join('addr')
+        :on('usr.addr_id', 'addr.id')),
+        'SELECT * FROM user usr ' ..
+        'INNER JOIN address addr ON usr.addr_id = addr.id')
+    end)
+
+    it('can be called multiple times', function()
+      assert.are.esame(tostring(select():from('usr', 'psn'):join('addr')
+        :on({['usr.addr_id']='addr.id'}):on('psn.addr_id', 'addr.id')),
+        'SELECT * FROM user usr, person psn ' ..
+        'INNER JOIN address addr ON usr.addr_id = addr.id AND psn.addr_id = addr.id',
+        'SELECT * FROM user usr, person psn ' ..
+        'INNER JOIN address addr ON psn.addr_id = addr.id AND usr.addr_id = addr.id')
+    end)
+
+    it('can be called multiple times w/ an object literal', function()
+      assert.are.esame(tostring(select():from('usr', 'psn'):join('addr')
+        :on({['usr.addr_id']='addr.id'}):on({['psn.addr_id']='addr.id'})),
+        'SELECT * FROM user usr, person psn ' ..
+        'INNER JOIN address addr ON usr.addr_id = addr.id AND psn.addr_id = addr.id',
+        'SELECT * FROM user usr, person psn ' ..
+        'INNER JOIN address addr ON psn.addr_id = addr.id AND usr.addr_id = addr.id')
+    end)
+
+    it('should accept an expression', function()
+      assert.are.same(
+        tostring(select():from('usr'):join('addr'):on(eq('usr.addr_id', sql('addr.id')))),
+        'SELECT * FROM user usr INNER JOIN address addr ON usr.addr_id = addr.id')
+    end)
+  end)
+
+  describe('WHERE clauses', function()
+    it('should AND multiple where() criteria by default', function()
+      assert.are.esame(
+        tostring(select():from('user'):where({first_name='Fred', last_name='Flintstone'})),
+        "SELECT * FROM user WHERE first_name = 'Fred' AND last_name = 'Flintstone'",
+        "SELECT * FROM user WHERE last_name = 'Flintstone' AND first_name = 'Fred'"
+      )
+    end)
+
+    it('should AND multiple where()s by default', function()
+      assert.are.esame(
+        tostring(
+          select():from('user'):where({first_name='Fred'}):where({last_name='Flintstone'})
+        ),
+        "SELECT * FROM user WHERE first_name = 'Fred' AND last_name = 'Flintstone'",
+        "SELECT * FROM user WHERE last_name = 'Flintstone' AND first_name = 'Fred'"
+      )
+    end)
+
+    it('should handle explicit :_and() with (key, value) args', function()
+      assert.are.esame(
+        tostring(
+          select():from('user'):where('first_name', 'Fred'):_and('last_name', 'Flintstone')
+        ),
+        "SELECT * FROM user WHERE first_name = 'Fred' AND last_name = 'Flintstone'",
+        "SELECT * FROM user WHERE last_name = 'Flintstone' AND first_name = 'Fred'"
+      )
+    end)
+
+    it('should handle nested _and(_or()) yaya', function()
+      assert.are.esame(
+        tostring(
+          select():from('user'):where(
+            _and({last_name='Flintstone'}, _or({first_name='Fred'}, {first_name='Wilma'}))
+          )
+        ),
+        "SELECT * FROM user WHERE last_name = 'Flintstone' AND (first_name = 'Fred' OR first_name = 'Wilma')",
+        "SELECT * FROM user WHERE (first_name = 'Fred' OR first_name = 'Wilma') AND last_name = 'Flintstone'"
+      )
+    end)
+
+    it('and() should be implicit', function()
+      assert.are.esame(
+        tostring(
+          select():from('user'):where({last_name='Flintstone'},_or({first_name='Fred'}, {first_name='Wilma'}))
+        ),
+        "SELECT * FROM user WHERE last_name = 'Flintstone' AND (first_name = 'Fred' OR first_name = 'Wilma')",
+        "SELECT * FROM user WHERE (first_name = 'Fred' OR first_name = 'Wilma') AND last_name = 'Flintstone'"
+      )
+    end)
+
+    it('should handle like()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(like('last_name', 'Flint%'))),
+        "SELECT * FROM user WHERE last_name LIKE 'Flint%'"
+      )
+    end)
+
+    it('should accept a 3rd escape param to like()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(like('percent', '100\\%', '\\'))),
+        "SELECT * FROM user WHERE percent LIKE '100\\%' ESCAPE '\\'"
+      )
+    end)
+
+    it('should handle _not()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(_not({first_name='Fred'}))),
+        "SELECT * FROM user WHERE NOT first_name = 'Fred'"
+      )
+    end)
+
+    it('should handle _in()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(_in('first_name', {'Fred', 'Wilma'}))),
+        "SELECT * FROM user WHERE first_name IN ('Fred', 'Wilma')"
+      )
+    end)
+
+    it('should handle :_in() with multiple args', function()
+      assert.are.same(
+        tostring(select():from('user'):where(_in('name', 'Jimmy', 'Owen'))),
+        "SELECT * FROM user WHERE name IN ('Jimmy', 'Owen')"
+      )
+    end)
+
+    it('should handle :_in() with a subquery', function()
+      assert.are.same(
+        tostring(select():from('user'):where(_in('addr_id', select('id'):from('address')))),
+        'SELECT * FROM user WHERE addr_id IN (SELECT id FROM address)'
+      )
+    end)
+
+    it('should handle exists() with a subquery', function()
+      assert.are.same(
+        tostring(
+          select():from('user'):where(exists(select():from('address')
+            :where({['user.addr_id']=sql('address.id')})))
+        ),
+        'SELECT * FROM user WHERE EXISTS (SELECT * FROM address WHERE user.addr_id = address.id)'
+      )
+    end)
+
+    it('should handle exists() with a subquery, parameterized', function()
+      assert.params(
+        select():from('user'):where('active', true):where(
+          exists(select():from('address'):where({['user.addr_id']=37}))
+        ),
+        'SELECT * FROM user WHERE active = $1 AND EXISTS (SELECT * FROM address WHERE user.addr_id = $2)',
+        {true, 37}
+      )
+    end)
+
+    it('should handle isNull()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(isNull('first_name'))),
+        'SELECT * FROM user WHERE first_name IS NULL'
+      )
+    end)
+
+    it('should handle isNotNull()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(isNotNull('first_name'))),
+        'SELECT * FROM user WHERE first_name IS NOT NULL'
+      )
+    end)
+
+    it('should handle explicit equal()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(eq('first_name', 'Fred'))),
+        "SELECT * FROM user WHERE first_name = 'Fred'"
+      )
+    end)
+
+    it('should handle lt()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(lt('order', 5))),
+        'SELECT * FROM user WHERE "order" < 5'
+      )
+    end)
+
+    it('should handle le()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(le('order', 5))),
+        'SELECT * FROM user WHERE "order" <= 5'
+      )
+    end)
+
+    it('should handle gt()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(gt('order', 5))),
+        'SELECT * FROM user WHERE "order" > 5'
+      )
+    end)
+
+    it('should handle ge()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(ge('order', 5))),
+        'SELECT * FROM user WHERE "order" >= 5'
+      )
+    end)
+
+    it('should handle between()', function()
+      assert.are.same(
+        tostring(select():from('user'):where(between('name', 'Frank', 'Fred'))),
+        "SELECT * FROM user WHERE name BETWEEN 'Frank' AND 'Fred'"
+      )
+    end)
   end)
 
 end)
