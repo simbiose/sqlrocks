@@ -2,11 +2,6 @@
 local class, string, math, table =
   require '30log', require 'string', require 'math', require 'table'
 
-local ppx = require('utils')
-local pp=function(...) end
---local ppx=pp
---local ppx = print
-
 local find, match, gsub, sub, lower, upper, format, max, floor, concat, type, pairs,
   ipairs, tostring, select, next, error, setmetatable, getmetatable =
   string.find, string.match, string.gsub, string.sub, string.lower, string.upper,
@@ -49,17 +44,20 @@ local compounds = {
   intersectAll='INTERSECT ALL', minus='MINUS', minusAll='MINUS ALL',
   except='EXCEPT', exceptAll='EXCEPT ALL'}
 
-local function clone(val)
-  if type(val) ~= 'table' then return val end
-  local mt, res = getmetatable(val), {}
-  for k,v in pairs(val) do
-    if type(v) == 'table' then
-      v = clone(v)
+function clone(orig)
+  local orig_type = type(orig)
+  local copy
+  if 'table' == orig_type and orig.is then
+    copy = orig:extends()
+  elseif 'table' == orig_type then
+    copy = {}
+    for orig_key, orig_value in next, orig, nil do
+      copy[clone(orig_key)] = clone(orig_value)
     end
-    res[k] = v
+  else
+    copy = orig
   end
-  setmetatable(res, mt)
-  return res
+  return copy
 end
 
 local function extend(original, ...)
@@ -74,22 +72,6 @@ local function extend(original, ...)
     end
   end
   return original
-end
-
-local function concatenate(...)
-  local result = {}
-  for i=1, select('#', ...) do
-    local arg = select(i, ...)
-    if type(arg) == 'table' and not arg.is then
-      for _, v in ipairs(arg) do
-        --ppx(' concatenate pure table ', v)
-        result[#result + 1] = v
-      end
-    else
-      result[#result + 1] = arg
-    end
-  end
-  return result
 end
 
 local function trim(s)
@@ -112,14 +94,12 @@ local function split(delimiter, text, ...)
   return list
 end
 
-local function is_array(array)
-  if not array or 'table' ~= type(array) then
-    return false
-  end
-  for k in pairs(array) do
-    if type(k) ~= 'number' or k < 0 or floor(k) ~= k then
-      return false
-    end
+local function is_array(t)
+  if not t or type(t) ~= 'table' then return false end
+  local i = 0
+  for _ in pairs(t) do
+    i = i + 1
+    if t[i] == nil then return false end
   end
   return true
 end
@@ -129,8 +109,8 @@ local function args2array(args)
   if #args==1 and is_array(args[1]) then
     return args[1]
   elseif 'string' == type(args[1]) and find(args[1], ',', 1, true) ~= nil then
-    local results = split(',', args[1], true)
-    for i=1, #results do results[i] = trim(results[i]) end
+    local results = {}
+    gsub(args[1], "%s*([^%s,$]+)%s*,?$?", function(st) results[#results + 1] = st end)
     return results
   elseif 'table' == type(args[1]) and #args==1 then --then
     return args[1]
@@ -147,10 +127,10 @@ local function args2object(args)
 end
 
 local function convert(col, new_aliases)
-  local col_parts = split('.', col)
+  local col_parts = split('.', col, true)
   if #col_parts == 1 then return col end
 
-  local tbl_ix    = #col_parts - 2
+  local tbl_ix    = #col_parts - 1
   local tbl_alias = col_parts[tbl_ix]
   if new_aliases[tbl_alias] then
     col_parts[tbl_ix] = new_aliases[tbl_alias]
@@ -210,7 +190,6 @@ local function is_expr(e)
 end
 
 local function handle_value(val, opts)
-  ppx(' handle value ', type(val) .. (('table' == type(val) and rawget(val, '__name')) and ':'..rawget(val, '__name') or ''), opts)
   local _type = type(val)
   if 'table' == _type and val.is then
     if val:is(Statement) then return format('(%s)', val:_toString(opts)) end
@@ -235,21 +214,28 @@ local function handle_value(val, opts)
 end
 
 local function handle_column(expr, opts)
-  ppx(' handle column ', type(expr) .. (('table' == type(expr) and rawget(expr, '__name')) and ':'..rawget(expr, '__name') or ''), expr, opts)
   if expr.is then
     if expr:is(Statement) then return format('(%s)', expr:_toString(opts)) end
     if expr:is(Val) then return handle_value(expr.val, opts) end
   end
 
-  local prefix, dot, field, alias =
-    match(expr, '^([%w%_%-]+)(%.*)([%w%_%d%-]*)%s?[aA]?[sS]?%s?([%w%d%_%-]*)')
-  if prefix then
-    if field == '' and prefix ~= '' then field = prefix prefix = '' end
+  local db, tb, fd, al = match(
+    expr, "^([%w%_%-%d]*)%.?([%w%_%-%d]*)%.?([%w%_%-%d]*)%s?[aA]?[sS]?%s?([[%w%_%-%d]*]?)$")
+  if db then
+    local tb_dot, db_dot = '.', '.'
+    if fd == '' and tb == '' then
+      fd = (reserved[lower(db)] and format('"%s"', db) or db)
+      db = '' db_dot = '' tb_dot = ''
+    elseif fd == '' and tb ~= '' then
+      fd, tb = (reserved[lower(tb)] and format('"%s"', tb) or tb),
+        (reserved[lower(db)] and format('"%s"', db) or db) db = '' db_dot = ''
+    else
+      fd, tb, db = (reserved[lower(fd)] and format('"%s"', fd) or fd), 
+        (reserved[lower(tb)] and format('"%s"', tb) or tb),
+        (reserved[lower(db)] and format('"%s"', db) or db)
+    end
     return format(
-        "%s%s%s%s%s", prefix, dot, 
-        (reserved[lower(field)] and format('"%s"', field) or field),
-        (alias == "" and alias or " AS "), alias
-      )
+      "%s%s%s%s%s%s%s", db, db_dot, tb, tb_dot, fd, (al == '' and '' or ' AS '), al)
   end
   return expr
 end
@@ -261,7 +247,6 @@ end
 -- res, data, opts, multiples=false, value=false, appends=' '
 
 local function handles(res, data, opts, ...)
-  pp(' handles ', res, data, opts)
   local both, value, appends, addendum = ...
   both, value, appends, addendum =
     (both or false), (value or false), (appends or ', '), (addendum or ' ')
@@ -298,7 +283,6 @@ local function handles(res, data, opts, ...)
       res[#res] = sub(res[#res], 1, -5)
       return res
     else
-      --ppx(data)
       for k in pairs(data) do
         res[#res + 1] =
           format('%s%s', handle_value((data[k].val or data[k]), opts), appends)
@@ -316,7 +300,6 @@ local function handles(res, data, opts, ...)
     end
   end
   res[#res] = sub(res[#res], 1, ((#appends + 1) * -1)) .. addendum
-  --ppx(res)
   return res
 end
 
@@ -392,8 +375,9 @@ function Statement:clone()
   elseif self:is(Delete) then ctor = Delete end
 
   local stmt = ctor:extends(self)
-  if stmt._where  then stmt._where  = stmt._where:clone() end
-  if stmt.joins   then stmt.joins   = stmt.joins:slice()  end
+
+  if stmt._where  then stmt._where  = clone(stmt._where)  end
+  if stmt.joins   then stmt.joins   = clone(stmt.joins)   end
   if stmt._values then stmt._values = clone(stmt._values) end
   return stmt
 end
@@ -422,12 +406,10 @@ function Statement:toParams(opts)
 end
 
 function Statement:__tostring()
-  ppx(' __tostring ')
   return self:__concat({})
 end
 
 function Statement:__concat(opts)
-  ppx(' __concat ')
   if self.prev_stmt then return tostring(self.prev_stmt)
   else return trim(self:_toString(opts)) end
 end
@@ -443,7 +425,13 @@ end
 
 function Statement:_add(arr, name)
   if not self[name] then self[name] = {} end
-  self[name] = concatenate(self[name], arr)
+
+  if 'table' == type(arr) and not arr.is then
+    for i=1, #arr do self[name][#self[name] + 1] = arr[i] end
+  else
+    self[name][#self[name] + 1] = arr
+  end
+
   return self
 end
 
@@ -458,7 +446,6 @@ function Statement:_addListArgs(args, name)
 end
 
 function Statement:_addExpression(args, name)
-  ppx(' _addExpression ', name)--, args, name)
   if not self[name] then self[name] = _and() end
   if #args==2 and 'table' ~= type(args[1]) and 'table' ~= type(args[2]) or 
    (#args==2 and args[1].is and (args[1]:is(Sql) or args[1]:is(Val)) or --and
@@ -481,10 +468,8 @@ function Statement:_addJoins(args, _type)
   local tbls, on
 
   if 'table' == type(args[2]) then
-    ppx(' >> table << ', args)
     tbls, on = {args[1]}, args[2]
   else
-    ppx(' >>>>> ')
     tbls = args2array(args)
   end
 
@@ -512,7 +497,6 @@ end
 Select = Statement:extends()
 Select.__name = 'Select'
 function Select:__init(...)
-  --ppx(' select ', ...)
   self.super.__init(self, 'select')
   return self:select(...)
 end
@@ -593,9 +577,7 @@ Select.orderBy        = order
 for key, value in pairs(compounds) do
   Select[key] = function(self, ...)
     local stmts, stmt = args2array({...})
-    --ppx(#stmts, stmts)
     if 'table' == type(stmts) and #stmts == 0 and not stmts.is then
-      ppx(' == == ')
       stmt = Select()
       stmt.prev_stmt, stmt._aliases, stmt._views, stmt._joinCriteria =
         self, self._aliases, self._views, self._joinCriteria
@@ -605,7 +587,6 @@ for key, value in pairs(compounds) do
     self:_add(stmts, '_' .. key)
 
     if stmt then
-      ppx(' we have a stametent ')
       return stmt
     end
     return self
@@ -627,24 +608,26 @@ function Select:joinView(view, on, _type)
       new_aliases[j_alias] = format('%s_%s', alias, j_alias)
       _tbl = format('%s %s_%s', j_tbl, alias, j_alias)
       local join =
-        Join(_tbl, view.joins[i].left_tbl, views.joins[i].on, views.joins[i].type)
+        Join(_tbl, view.joins[i].left_tbl, view.joins[i].on, view.joins[i].type)
+      join._joinCriteria = self._joinCriteria
+      if not join.on then join.on = join:autoGenerateOn(_tbl, join.left_tbl) end
       self.joins[#self.joins + 1] = join
-      if join.on then join.on = join.autoGenerateOn(_tbl, join.left_tbl) end
-      join.on = namespace_on(join.on, new_aliases)
+      join.on = namespaced_on(join.on, new_aliases)
     end
   end
 
   if view._where then
     for i=1, #view._where.expressions do
-      local expr = view._where.expressions[i]:clone()
+      local expr = view._where.expressions[i]:extends() --view._where.expressions[i]:clone()
       convert_expr(expr, new_aliases)
       self:where(expr)
     end
   end
+
+  return self
 end
 
 function Select:_toString(opts)
-  --ppx(self.cols)
   local cols, res = (#self.cols > 0 and self.cols or {'*'}), {'SELECT '}
   if self._distinct then res[#res + 1] = 'DISTINCT ' end
   handles(res, cols, opts)
@@ -681,8 +664,7 @@ function Select:_toString(opts)
 
   for key, value in pairs(compounds) do
     local stmt = self['_' .. key]
-    if stmt then
-      ppx(#stmt, ' -- ')
+    if stmt and #stmt > 0 then
       res[#res + 1] = value res[#res + 1] = ' '
       for i=1, (#stmt - 1) do
         res[#res + 1] = format('%s %s ', stmt[i]:_toString(opts), value)
@@ -728,19 +710,16 @@ function Insert:into(tbl, ...)
   if tbl then self.tbls = {self:expandAlias(tbl)} end
   local values = {...}
   if #values > 0 then
-    ppx(is_array(values[1]), values[1][1])
     if 'string' == type(values[1]) or 
       (is_array(values[1]) and 'string' == type(values[1][1]))
     then
 
       self._split_keys_vals_mode, self._values = true, {}
       local arr = args2array({...})
-      ppx(' into! ', arr)
       for k=1, #arr do
         self._values[#self._values + 1] = {key=arr[k]}
       end
     else
-      ppx(' goto values ! ')
       self:values(...)
     end
   end
@@ -751,7 +730,6 @@ function Insert:values(...)
   if self._split_keys_vals_mode then
     --
     if #values > 0 then
-      ppx(values, #values)
       if 'table' == type(values[1]) then
         local y, x = 1, 1
         while true do
@@ -764,14 +742,11 @@ function Insert:values(...)
           y = y + 1
           if y > #self._values then x, y = x + 1, 1 end
         end
-        --ppx(self._values)
       else
         for k=1, #values do
           self._values[k].val = values[k]
         end
       end
-    else
-      ppx('WTF!!')
     end
   else
     local x = 1
@@ -873,7 +848,6 @@ function Update:_toString(opts)
     res[#res + 1] = self._or
   end
   res[#res + 1] = format('%s SET ', self.tbls[1])
-  --ppx(self._values)
   handles(res, self._values, opts, true)
   if self._where then
     res[#res + 1] = format('WHERE %s', self:_exprToString(opts))
@@ -948,7 +922,7 @@ end
 
 function Join:__concat(opts)
   local on, result = self.on, {}
-  if not on then
+  if not on or next(on) == nil then
     if self._joinCriteria then
       on = self:autoGenerateOn(self.tbl, self.left_tbl)
     else
@@ -958,7 +932,6 @@ function Join:__concat(opts)
   if is_expr(on) then
     on = on .. opts
   else
-    ppx(on)
     for key, val in pairs(on) do
       result[#result + 1] =
         format('%s = %s', handle_column(key, opts), handle_column(val, opts))
@@ -987,16 +960,14 @@ function Group:__init(op, expressions)
       obj2equals(expressions[k], self.expressions)
     end
   end
-  ppx(' group ', op, #self.expressions)
 end
 
 function Group:clone()
-  return Group(self.op, clone(self.expressions))
+  return Group(self.op, self.expressions:extends()) --clone(self.expressions))
 end
 
 function Group:__concat(opts)
   local res = {}
-  ppx(' -- group concat --')
   for k in pairs(self.expressions) do
     res[#res + 1] = format("%s %s ", (self.expressions[k] .. opts), self.op)
   end
@@ -1020,11 +991,10 @@ function Not:__init(expr)
 end
 
 function Not:clone()
-  return Not(clone(self.expressions[1]))
+  return Not(self.expressions[1]:extends()) -- Not(clone(self.expressions[1]))
 end
 
 function Not:__concat(opts)
-  ppx(self.expressions)
   return format('NOT %s', self.expressions[1] .. opts)
 end
 
@@ -1037,7 +1007,6 @@ function Not:__tostring() return self:__concat({}) end
 --
 
 function Binary:__init(op, col, val, ...)
-  --ppx(' _binary ', op, col, val)
   self.op, self.col, self.val, self.quantifier =
     op, col, val, (... or '')
 end
@@ -1047,7 +1016,6 @@ function Binary:clone()
 end
 
 function Binary:__concat(opts)
-  --ppx(self.col)
   return format('%s %s %s%s', handle_column(self.col, opts), self.op,
     self.quantifier, handle_value(self.val, opts))
 end
@@ -1204,7 +1172,7 @@ function SQLRocks:__call(_expansions, _criteria, _views)
       _not      = Not,       like   = Like,   between  = Between,  isNull = isNull,
       isNotNull = isNotNull, exists = Exists, eq       = eq,       eqAll  = eqAll,
       eqAny     = eqAny,     notEq  = notEq,  notEqAll = notEqAll, ltAny  = ltAny,
-      notEqAny  = notEqAn,   lt     = lt,     ltAll    = ltAll,    le     = le,
+      notEqAny  = notEqAny,  lt     = lt,     ltAll    = ltAll,    le     = le,
       leAll     = leAll,     leAny  = leAny,  gt       = gt,       gtAll  = gtAll,
       gtAny     = gtAny,     ge     = ge,     geAll    = geAll,    geAny  = geAny,
       _in       = In
