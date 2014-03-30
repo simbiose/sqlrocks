@@ -1,12 +1,10 @@
+local string, math, table = require 'string', require 'math', require 'table'
 
-local class, string, math, table =
-  require '30log', require 'string', require 'math', require 'table'
-
-local find, match, gsub, sub, lower, upper, format, max, floor, concat, type, pairs,
-  ipairs, tostring, select, next, error, setmetatable, getmetatable =
-  string.find, string.match, string.gsub, string.sub, string.lower, string.upper,
-  string.format, math.max, math.floor, table.concat, type, pairs, ipairs, tostring,
-  select, next, error, setmetatable, getmetatable
+local find, match, gmatch, gsub, sub, lower, upper, format, max, floor, concat, type,
+  pairs, ipairs, tostring, select, next, error, rawset, setmetatable, getmetatable =
+  string.find, string.match, string.gmatch, string.gsub, string.sub, string.lower,
+  string.upper, string.format, math.max, math.floor, table.concat, type, pairs,
+  ipairs, tostring, select, next, error, rawset, setmetatable, getmetatable
 
 string, math, table = nil, nil, nil
 
@@ -44,6 +42,83 @@ local compounds = {
   intersectAll='INTERSECT ALL', minus='MINUS', minusAll='MINUS ALL',
   except='EXCEPT', exceptAll='EXCEPT ALL'}
 
+--
+--
+--
+--
+--
+
+local classes = setmetatable({}, {__mode='k'})
+
+local function deep_copy(t, dest)
+  local t, r = t or {}, dest or {}
+  for k,v in pairs(t) do
+    if type(v) == 'table' and k ~= '__index' then
+      r[k] = deep_copy(v)
+    else
+      r[k] = v
+    end
+  end
+  return r
+end
+
+local function is(self, klass)
+  local m = getmetatable(self)
+  while m do 
+    if m == klass then return true end
+    m = m.super
+  end
+  return false
+end
+
+local function extends(self, ...)
+  local meta = {}
+  if ... then deep_copy(..., deep_copy(self, meta)) else deep_copy(self, meta) end
+  setmetatable(meta, getmetatable(self))
+  return meta
+end
+
+local function new_index(self, key, value)
+  rawset(self, key, value)    
+  for i=1, #classes[self] do
+    classes[self][i][key] = value
+  end
+end
+
+local function class(base)
+  local c, mt = {}, {}
+  if type(base) == 'table' then
+    for i,v in pairs(base) do c[i] = v end
+    c.super = base
+  end
+
+  c.__index     = c
+  c.is          = is
+  c.extends     = extends
+  mt.__newindex = new_index
+  classes[c]    = {}
+
+  mt.__call = function(self, ...)
+    local obj = {}
+    setmetatable(obj, c)
+    if c.__init then c.__init(obj, ...) end
+    return obj
+  end
+
+  if c.super then
+    classes[c.super][#classes[c.super] + 1] = c
+  end
+
+  setmetatable(c, mt)
+  return c
+end
+
+--
+--
+--
+--
+--
+
 function clone(orig)
   local orig_type = type(orig)
   local copy
@@ -60,38 +135,15 @@ function clone(orig)
   return copy
 end
 
-local function extend(original, ...)
-  local args = {...}
-  for i=1, #args do
-    for k,v in pairs(args[i]) do
-      if 'table' == type(v) and v.key and v.val then
-        original[v.key] = v.val
-      else
-        original[k] = v
-      end
+local function extend(original, source)
+  for k,v in pairs(source) do
+    if 'table' == type(v) and v.key and v.val then
+      original[v.key] = v.val
+    else
+      original[k] = v
     end
   end
   return original
-end
-
-local function trim(s)
-  return match(s,'^()%s*$') and '' or match(s,'^%s*(.*%S)')
-end
-
-local function split(delimiter, text, ...)
-  local list, pos, no_patterns = {}, 1, (... or false)
-  if find('', delimiter, 1) then return list end
-  while true do
-    local first, last = find(text, delimiter, pos, no_patterns)
-    if first then
-      list[#list + 1] = sub(text, pos, first-1)
-      pos = last+1
-    else
-      list[#list + 1] = sub(text, pos)
-      break
-    end
-  end
-  return list
 end
 
 local function is_array(t)
@@ -112,7 +164,7 @@ local function args2array(args)
     local results = {}
     gsub(args[1], "%s*([^%s,$]+)%s*,?$?", function(st) results[#results + 1] = st end)
     return results
-  elseif 'table' == type(args[1]) and #args==1 then --then
+  elseif 'table' == type(args[1]) and #args==1 then
     return args[1]
   else
     return args
@@ -127,7 +179,8 @@ local function args2object(args)
 end
 
 local function convert(col, new_aliases)
-  local col_parts = split('.', col, true)
+  local col_parts = {}
+  for key in gmatch(col, "([^%.]+)") do col_parts[#col_parts + 1] = key end
   if #col_parts == 1 then return col end
 
   local tbl_ix    = #col_parts - 1
@@ -244,23 +297,24 @@ end
 --
 --
 --
--- res, data, opts, multiples=false, value=false, appends=' '
+--
 
 local function handles(res, data, opts, ...)
   local both, value, appends, addendum = ...
   both, value, appends, addendum =
     (both or false), (value or false), (appends or ', '), (addendum or ' ')
 
+  local vk, vv = next(data)
+
   if both then
-    for k in pairs(data) do
-      if 'table' == type(data[k]) and data[k].key then
+    if 'table' == type(vv) and vv.key then
+      for k=1, #data do
         res[#res + 1] = format(
-            '%s = %s%s',
-            handle_column(data[k].key, opts),
-            handle_value(data[k].val, opts),
-            appends
+            '%s = %s%s', handle_column(data[k].key, opts), handle_value(data[k].val, opts), appends
           )
-      else
+      end
+    else
+      for k in pairs(data) do
         res[#res + 1] = format(
           '%s = %s%s', handle_column(k, opts), handle_value(data[k], opts), appends
         )
@@ -271,9 +325,8 @@ local function handles(res, data, opts, ...)
   end
 
   if value then
-    local _, total = next(data)
-    if 'table' == type(total) and 'table' == type(total.val) then
-      for w=1, #total.val do
+    if 'table' == type(vv) and 'table' == type(vv.val) then
+      for w=1, #vv.val do
         for k=1, #data do
           res[#res + 1] =
             format('%s%s', handle_value(data[k].val[w], opts), appends)
@@ -289,11 +342,13 @@ local function handles(res, data, opts, ...)
       end
     end
   else
-    for k in pairs(data) do
-      if 'number' == type(k) then
+    if 'number' == type(vk) then
+      for k=1, #data do
         res[#res + 1] = 
           format('%s%s', handle_column((data[k].key or data[k]), opts), appends)
-      else
+      end
+    else
+      for k in pairs(data) do
         res[#res + 1] = 
           format('%s%s', handle_column((data[k].key or k), opts), appends)
       end
@@ -388,9 +443,9 @@ function Statement:toParams(opts)
   end
 
   opts = opts or {}
-  opts.parameterized = opts.parameterized or true
-  opts.values        = opts.values or {}
-  opts.value_ix      = opts.value_ix or 1
+  opts.parameterized, opts.values, opts.value_ix =
+    (opts.parameterized or true), (opts.values or {}), (opts.value_ix or 1)
+
   local sql          = self .. opts
   local result       = {}
   
@@ -411,7 +466,7 @@ end
 
 function Statement:__concat(opts)
   if self.prev_stmt then return tostring(self.prev_stmt)
-  else return trim(self:_toString(opts)) end
+  else return self:_toString(opts) end
 end
 
 function Statement:_exprToString(opts, expr)
@@ -420,7 +475,7 @@ function Statement:_exprToString(opts, expr)
   if expr.expressions and #expr.expressions == 1 then
     expr.expressions[1].parens = false
   end
-  return (expr .. opts) .. ' '
+  return format('%s ', (expr .. opts))
 end
 
 function Statement:_add(arr, name)
@@ -448,7 +503,7 @@ end
 function Statement:_addExpression(args, name)
   if not self[name] then self[name] = _and() end
   if #args==2 and 'table' ~= type(args[1]) and 'table' ~= type(args[2]) or 
-   (#args==2 and args[1].is and (args[1]:is(Sql) or args[1]:is(Val)) or --and
+   (#args==2 and args[1].is and (args[1]:is(Sql) or args[1]:is(Val)) or
    args[2] and args[2].is and (args[2]:is(Sql) or args[2]:is(Val))) then
     self[name].expressions[#self[name].expressions + 1] = eq(args[1], args[2])
   else
@@ -485,7 +540,7 @@ function Statement:_addJoins(args, _type)
 end
 
 function Statement:expandAlias(tbl)
-  return self._aliases[tbl] and (self._aliases[tbl] ..' '.. tbl) or tbl
+  return self._aliases[tbl] and format('%s %s', self._aliases[tbl], tbl) or tbl
 end
 
 --
@@ -494,8 +549,9 @@ end
 --
 --
 
-Select = Statement:extends()
+Select = class(Statement)
 Select.__name = 'Select'
+
 function Select:__init(...)
   self.super.__init(self, 'select')
   return self:select(...)
@@ -618,7 +674,7 @@ function Select:joinView(view, on, _type)
 
   if view._where then
     for i=1, #view._where.expressions do
-      local expr = view._where.expressions[i]:extends() --view._where.expressions[i]:clone()
+      local expr = view._where.expressions[i]:extends()
       convert_expr(expr, new_aliases)
       self:where(expr)
     end
@@ -683,7 +739,7 @@ function Select:_toString(opts)
     end
   end
 
-  return trim(concat(res))
+  return sub(concat(res), 1, -2)
 end
 
 --
@@ -692,8 +748,9 @@ end
 --
 --
 
-Insert = Statement:extends()
+Insert = class(Statement)
 Insert.__name = 'Insert'
+
 function Insert:__init(expansions, tbl, ...)
   self._aliases = expansions
   self.super.__init(self, 'insert')
@@ -725,6 +782,7 @@ function Insert:into(tbl, ...)
   end
   return self
 end
+
 function Insert:values(...)
   local values = args2array({...})
   if self._split_keys_vals_mode then
@@ -805,7 +863,7 @@ function Insert:_toString(opts)
     handles(res, self._returning, opts)
   end
 
-  return concat(res)
+  return sub(concat(res), 1, -2)
 end
 
 --
@@ -814,8 +872,9 @@ end
 --
 --
 
-Update = Statement:extends()
+Update = class(Statement)
 Update.__name = 'Update'
+
 function Update:__init(expansions, tbl, ...)
   self._aliases = expansions
   self.super.__init(self, 'update')
@@ -853,7 +912,7 @@ function Update:_toString(opts)
     res[#res + 1] = format('WHERE %s', self:_exprToString(opts))
   end
 
-  return concat(res)
+  return sub(concat(res), 1, -2)
 end
 
 --
@@ -862,8 +921,9 @@ end
 --
 --
 
-Delete = Statement:extends()
+Delete = class(Statement)
 Delete.__name = 'Delete'
+
 function Delete:__init(expansions, ...)
   self._aliases = expansions
   self.super.__init(self, 'delete')
@@ -901,7 +961,7 @@ function Delete:_toString(opts)
     res[#res + 1] = format('WHERE %s', self:_exprToString(opts))
   end
 
-  return concat(res)
+  return sub(concat(res), 1, -2)
 end
 
 --
@@ -963,7 +1023,7 @@ function Group:__init(op, expressions)
 end
 
 function Group:clone()
-  return Group(self.op, self.expressions:extends()) --clone(self.expressions))
+  return Group(self.op, self.expressions:extends())
 end
 
 function Group:__concat(opts)
@@ -991,7 +1051,7 @@ function Not:__init(expr)
 end
 
 function Not:clone()
-  return Not(self.expressions[1]:extends()) -- Not(clone(self.expressions[1]))
+  return Not(self.expressions[1]:extends())
 end
 
 function Not:__concat(opts)
@@ -1104,12 +1164,12 @@ end
 function In:__concat(opts)
   local res = ''
   if is_array(self.list) then
-    res = concat(handles({}, self.list, opts, false, true))
+    res = sub(concat(handles({}, self.list, opts, false, true)), 1, -2)
   elseif self.list.is and self.list:is(Statement) then
     res = self.list:_toString(opts)
   end
 
-  return format('%s IN (%s)', handle_column(self.col, opts), trim(res))
+  return format('%s IN (%s)', handle_column(self.col, opts), res)
 end
 
 function In:__tostring() return self:__concat({}) end
@@ -1141,6 +1201,7 @@ function Exists:__tostring() return self:__concat({}) end
 --
 
 function Val:__init(_val) self.val = _val end
+
 function Val:__tostring() return self.val end
 
 --
@@ -1150,7 +1211,9 @@ function Val:__tostring() return self.val end
 --
 
 function Sql:__init(str)   self.str = str end
+
 function Sql:__tostring()  return self.str end
+
 function Sql:__concat(arg) return self.str .. arg end
 
 --
