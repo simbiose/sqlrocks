@@ -1,10 +1,10 @@
 local string, math, table = require 'string', require 'math', require 'table'
 
-local find, match, gmatch, gsub, sub, lower, upper, format, max, floor, concat, type,
-  pairs, ipairs, tostring, select, next, error, rawset, setmetatable, getmetatable =
+local find, match, gmatch, gsub, sub, lower, upper, format, max, floor, concat, insert,
+  type, pairs, ipairs, tostring, select, next, error, rawset, setmetatable, getmetatable =
   string.find, string.match, string.gmatch, string.gsub, string.sub, string.lower,
-  string.upper, string.format, math.max, math.floor, table.concat, type, pairs,
-  ipairs, tostring, select, next, error, rawset, setmetatable, getmetatable
+  string.upper, string.format, math.max, math.floor, table.concat, table.insert, type,
+  pairs, ipairs, tostring, select, next, error, rawset, setmetatable, getmetatable
 
 string, math, table = nil, nil, nil
 
@@ -71,6 +71,14 @@ local function is(self, klass)
   return false
 end
 
+local function include(self, ...)
+  if not ... then return end
+  for k,v in pairs(...) do
+    if self[k] then self[k] = nil end
+    self[k] = v
+  end
+end
+
 local function extends(self, ...)
   local meta = {}
   if ... then deep_copy(..., deep_copy(self, meta)) else deep_copy(self, meta) end
@@ -79,7 +87,7 @@ local function extends(self, ...)
 end
 
 local function new_index(self, key, value)
-  rawset(self, key, value)    
+  rawset(self, key, value)
   for i=1, #classes[self] do
     classes[self][i][key] = value
   end
@@ -95,6 +103,7 @@ local function class(base)
   c.__index     = c
   c.is          = is
   c.extends     = extends
+  c.include     = include
   mt.__newindex = new_index
   classes[c]    = {}
 
@@ -106,7 +115,7 @@ local function class(base)
   end
 
   if c.super then
-    classes[c.super][#classes[c.super] + 1] = c
+    insert(classes[c.super], c)
   end
 
   setmetatable(c, mt)
@@ -119,7 +128,106 @@ end
 --
 --
 
-function clone(orig)
+local Hash = class()
+Hash.__name = 'Hash'
+
+function Hash:__init(bootstrap)
+  rawset(self, '_i', 0)
+  rawset(self, 'index', {})
+  
+  if 'table' ~= type(bootstrap) then return end
+  for k,v in pairs(bootstrap) do self.index[k] = v end
+end
+
+function Hash:__newindex(key, val)
+  if not self.index[key] then
+    insert(self.index, key)
+  end
+
+  if nil == val then
+    for i=1, #self.index do
+      if self.index[i] == key then
+        remove(self.index, i)
+        self._i = self._i > 0 and (self._i - 1) or self._i
+      end
+    end
+  end
+
+  self.index[key] = val
+end
+
+function Hash:__index(key)
+  return rawget(getmetatable(self), key) or self.index[key]
+end
+
+function Hash:__pairs()
+  self._i = 0
+  local function iter(self)
+    self._i = self._i + 1
+    local k = self.index[self._i]
+    if k then return k, self.index[k] end
+  end
+  return iter, self
+end
+
+function Hash:add(index, val)
+  if 'number' == type(index) then
+    insert(self.index[self.index[index]], val)
+  else
+    insert(self.index[index], val)
+  end
+end
+
+function Hash:set(index, val)
+  if self.index[index] then
+    self.index[self.index[index]] = val return true
+  end
+  return false
+end
+
+function Hash:get(index)
+  if self.index[index] then return self.index[self.index[index]] end
+  return nil
+end
+
+function Hash:__len()
+  return #self.index
+end
+
+function Hash:__sub(hash)
+  if not('table' == type(hash) and hash.__name == 'Hash') then
+    error(format("expecting hash, got a '%s'", type(hash)))
+  end
+  local new_index = {}
+  for i=1, #self.index do
+    if hash.index[self.index[i]] then
+      insert(new_index, self.index[i])
+      new_index[self.index[i]] = self.index[self.index[i]]
+    end
+  end
+  return getmetatable(self)(new_index)
+end
+
+function Hash:__add(hash)
+  if not('table' == type(hash) and hash.__name == 'Hash') then
+    error(format("expecting hash, got a '%s'", type(hash)))
+  end
+  local new_hash = getmetatable(self)(self.index)
+  for i=1, #hash.index do
+    if not new_hash.index[hash.index[i]] then
+      new_hash[hash.index[i]] = hash.index[hash.index[i]]
+    end
+  end
+  return new_hash
+end
+
+--
+--
+--
+--
+--
+
+local function clone(orig)
   local orig_type = type(orig)
   local copy
   if 'table' == orig_type and orig.is then
@@ -133,17 +241,6 @@ function clone(orig)
     copy = orig
   end
   return copy
-end
-
-local function extend(original, source)
-  for k,v in pairs(source) do
-    if 'table' == type(v) and v.key and v.val then
-      original[v.key] = v.val
-    else
-      original[k] = v
-    end
-  end
-  return original
 end
 
 local function is_array(t)
@@ -162,7 +259,7 @@ local function args2array(args)
     return args[1]
   elseif 'string' == type(args[1]) and find(args[1], ',', 1, true) ~= nil then
     local results = {}
-    gsub(args[1], "%s*([^%s,$]+)%s*,?$?", function(st) results[#results + 1] = st end)
+    gsub(args[1], "%s*([^%s,$]+)%s*,?$?", function(st) insert(results, st) end)
     return results
   elseif 'table' == type(args[1]) and #args==1 then
     return args[1]
@@ -178,9 +275,15 @@ local function args2object(args)
   return obj
 end
 
+local function check_same_len(length, expected)
+  if length ~= expected then
+    error(format('expecting %d values, got %d', length, expected))
+  end
+end
+
 local function convert(col, new_aliases)
   local col_parts = {}
-  for key in gmatch(col, "([^%.]+)") do col_parts[#col_parts + 1] = key end
+  for key in gmatch(col, "([^%.]+)") do insert(col_parts, key) end
   if #col_parts == 1 then return col end
 
   local tbl_ix    = #col_parts - 1
@@ -250,10 +353,17 @@ local function handle_value(val, opts)
   end
 
   if opts and opts.parameterized then
-    opts.values[#opts.values + 1] = val
-    local prefix = (opts.placeholder or '$') .. opts.value_ix
-    opts.value_ix = opts.value_ix + 1
-    return prefix
+    insert(opts.values, val)
+    local prefix = ''
+    if opts.placeholder and opts.placeholder == '%' then
+      prefix = '%s'
+      opts.value_ix = opts.value_ix + 1
+      return prefix
+    else
+      prefix = format('%s%s', (opts.placeholder or '$'), tostring(opts.value_ix))
+      opts.value_ix = opts.value_ix + 1
+      return prefix
+    end
   end
 
   if 'string' == _type or 'table' == _type then
@@ -304,57 +414,44 @@ local function handles(res, data, opts, ...)
   both, value, appends, addendum =
     (both or false), (value or false), (appends or ', '), (addendum or ' ')
 
-  local vk, vv = next(data)
-
   if both then
-    if 'table' == type(vv) and vv.key then
-      for k=1, #data do
-        res[#res + 1] = format(
-            '%s = %s%s', handle_column(data[k].key, opts), handle_value(data[k].val, opts), appends
-          )
-      end
-    else
-      for k in pairs(data) do
-        res[#res + 1] = format(
-          '%s = %s%s', handle_column(k, opts), handle_value(data[k], opts), appends
-        )
-      end
+    for k,v in pairs(data) do
+      insert(res, format(
+        '%s = %s%s', handle_column(k, opts), handle_value(v, opts), appends))
     end
-    res[#res] = sub(res[#res], 1, ((#appends + 1) * -1)) .. addendum
+    res[#res] = format('%s%s', sub(res[#res], 1, ((#appends + 1) * -1)), addendum)
     return res
   end
 
   if value then
-    if 'table' == type(vv) and 'table' == type(vv.val) then
-      for w=1, #vv.val do
-        for k=1, #data do
-          res[#res + 1] =
-            format('%s%s', handle_value(data[k].val[w], opts), appends)
+    if data.is and data.is(data, Hash) and 'table' == type(data.get(data, 1)) then
+      for i=1, #data.get(data, 1) do
+        for k,v in pairs(data) do
+          insert(res, format('%s%s', handle_value(v[i], opts), appends))
         end
         res[#res] = format('%s), (', sub(res[#res], 1, -3))
       end
       res[#res] = sub(res[#res], 1, -5)
       return res
-    else
-      for k in pairs(data) do
-        res[#res + 1] =
-          format('%s%s', handle_value((data[k].val or data[k]), opts), appends)
-      end
+    end
+    for k, v in pairs(data) do
+      insert(res, format('%s%s', handle_value(v, opts), appends))
     end
   else
-    if 'number' == type(vk) then
-      for k=1, #data do
-        res[#res + 1] = 
-          format('%s%s', handle_column((data[k].key or data[k]), opts), appends)
+    for key in pairs(data) do
+      if 'number' == type(key) then
+        for k,v in pairs(data) do
+          insert(res, format('%s%s', handle_column(v, opts), appends))
+        end
+      else
+        for k in pairs(data) do
+          insert(res, format('%s%s', handle_column(k, opts), appends))
+        end
       end
-    else
-      for k in pairs(data) do
-        res[#res + 1] = 
-          format('%s%s', handle_column((data[k].key or k), opts), appends)
-      end
+      break
     end
   end
-  res[#res] = sub(res[#res], 1, ((#appends + 1) * -1)) .. addendum
+  res[#res] = format('%s%s', sub(res[#res], 1, ((#appends + 1) * -1)), addendum)
   return res
 end
 
@@ -406,9 +503,7 @@ local function forUpdate(self, ...)
 end
 
 local function obj2equals(obj, expressions)
-  for key in pairs(obj) do
-    expressions[#expressions + 1] = eq(key, obj[key])
-  end
+  for key in pairs(obj) do insert(expressions, eq(key, obj[key])) end
   return expressions
 end
 
@@ -431,9 +526,9 @@ function Statement:clone()
 
   local stmt = ctor:extends(self)
 
-  if stmt._where  then stmt._where  = clone(stmt._where)  end
-  if stmt.joins   then stmt.joins   = clone(stmt.joins)   end
-  if stmt._values then stmt._values = clone(stmt._values) end
+  if stmt._where  then stmt._where  = clone(stmt._where)       end
+  if stmt.joins   then stmt.joins   = clone(stmt.joins)        end
+  if stmt._values then stmt._values = Hash(stmt._values.index) end
   return stmt
 end
 
@@ -446,14 +541,16 @@ function Statement:toParams(opts)
   opts.parameterized, opts.values, opts.value_ix =
     (opts.parameterized or true), (opts.values or {}), (opts.value_ix or 1)
 
-  local sql          = self .. opts
-  local result       = {}
-  
-  for _, key in pairs(opts.values) do
-    if 'table' == type(key) then
-      result[#result + 1] = (key.is and tostring(key) or concat(key, ','))
-    else
-      result[#result + 1] = key  
+  local sql, result = (self .. opts), {}
+  local vv, vk      = next(opts.values)
+
+  if 'table' == type(vk) then
+    for _, key in pairs(opts.values) do
+      insert(result, (key.is and tostring(key) or concat(key, ',')))
+    end
+  else
+    for i=1, #opts.values do
+      insert(result, opts.values[i])
     end
   end
 
@@ -482,17 +579,11 @@ function Statement:_add(arr, name)
   if not self[name] then self[name] = {} end
 
   if 'table' == type(arr) and not arr.is then
-    for i=1, #arr do self[name][#self[name] + 1] = arr[i] end
+    for i=1, #arr do insert(self[name], arr[i]) end
   else
-    self[name][#self[name] + 1] = arr
+    insert(self[name], arr)
   end
 
-  return self
-end
-
-function Statement:_addToObj(obj, name)
-  if not self[name] then self[name] = {} end
-  extend(self[name], obj)
   return self
 end
 
@@ -505,11 +596,11 @@ function Statement:_addExpression(args, name)
   if #args==2 and 'table' ~= type(args[1]) and 'table' ~= type(args[2]) or 
    (#args==2 and args[1].is and (args[1]:is(Sql) or args[1]:is(Val)) or
    args[2] and args[2].is and (args[2]:is(Sql) or args[2]:is(Val))) then
-    self[name].expressions[#self[name].expressions + 1] = eq(args[1], args[2])
+    insert(self[name].expressions, eq(args[1], args[2]))
   else
     for k in pairs(args) do
       if is_expr(args[k]) then
-        self[name].expressions[#self[name].expressions + 1] = args[k]
+        insert(self[name].expressions, args[k])
       else
         obj2equals(args[k], self[name].expressions)
       end
@@ -531,7 +622,7 @@ function Statement:_addJoins(args, _type)
   for _, tbl in pairs(tbls) do
     tbl = self:expandAlias(tbl)
     local left_tbl = self.last_join or (self.tbls and self.tbls[#self.tbls])
-    self.joins[#self.joins + 1] = Join(tbl, left_tbl, on, _type)
+    insert(self.joins, Join(tbl, left_tbl, on, _type))
     self.joins[#self.joins]._joinCriteria = self._joinCriteria
   end
 
@@ -577,7 +668,10 @@ function Select:on(...)
     last_join.on = on
   else
     last_join.on = last_join.on or {}
-    extend(last_join.on, args2object({...}))
+    local args = args2object({...})
+    for k,v in pairs(args) do
+      last_join.on[k] = v
+    end
   end
   return self
 end
@@ -667,7 +761,7 @@ function Select:joinView(view, on, _type)
         Join(_tbl, view.joins[i].left_tbl, view.joins[i].on, view.joins[i].type)
       join._joinCriteria = self._joinCriteria
       if not join.on then join.on = join:autoGenerateOn(_tbl, join.left_tbl) end
-      self.joins[#self.joins + 1] = join
+      insert(self.joins, join)
       join.on = namespaced_on(join.on, new_aliases)
     end
   end
@@ -685,58 +779,60 @@ end
 
 function Select:_toString(opts)
   local cols, res = (#self.cols > 0 and self.cols or {'*'}), {'SELECT '}
-  if self._distinct then res[#res + 1] = 'DISTINCT ' end
+  if self._distinct then insert(res, 'DISTINCT ') end
   handles(res, cols, opts)
   if self._into then
-    res[#res + 1] =
-      format('INTO %s%s ', (self._into_tmp and 'TEMP ' or ''), self._into)
+    insert(res, format('INTO %s%s ', (self._into_tmp and 'TEMP ' or ''), self._into))
   end
   if self.tbls then
-    res[#res + 1] = format('FROM %s ', concat(self.tbls, ', '))
+    insert(res, format('FROM %s ', concat(self.tbls, ', ')))
   end
   if self.joins then
     for i=1, #self.joins do
-      res[#res + 1] = format('%s ', (self.joins[i] .. opts))
+      insert(res, format('%s ', (self.joins[i] .. opts)))
     end
   end
   if self._where then
-    res[#res + 1] = format('WHERE %s', self:_exprToString(opts))
+    insert(res, format('WHERE %s', self:_exprToString(opts)))
   end
   if self.group_by then
-    res[#res + 1] = 'GROUP BY ' handles(res, self.group_by, opts)
+    insert(res, 'GROUP BY ')
+    handles(res, self.group_by, opts)
   end
   if self._having then
-    res[#res + 1] = format('HAVING %s', self:_exprToString(opts, self._having))
+    insert(res, format('HAVING %s', self:_exprToString(opts, self._having)))
   end
   if self.order_by then
-    res[#res + 1] = 'ORDER BY ' handles(res, self.order_by, opts)
+    insert(res, 'ORDER BY ')
+    handles(res, self.order_by, opts)
   end
   if self._limit then
-    res[#res + 1] = format('LIMIT %s ', tostring(self._limit))
+    insert(res, format('LIMIT %s ', tostring(self._limit)))
   end
   if self._offset then
-    res[#res + 1] = format('OFFSET %s ', tostring(self._offset))
+    insert(res, format('OFFSET %s ', tostring(self._offset)))
   end
 
   for key, value in pairs(compounds) do
     local stmt = self['_' .. key]
     if stmt and #stmt > 0 then
-      res[#res + 1] = value res[#res + 1] = ' '
+      insert(res, value)
+      insert(res, ' ')
       for i=1, (#stmt - 1) do
-        res[#res + 1] = format('%s %s ', stmt[i]:_toString(opts), value)
+        insert(res, format('%s %s ', stmt[i]:_toString(opts), value))
       end
-      res[#res + 1] = stmt[#stmt]:_toString(opts) res[#res + 1] = ' '
+      insert(res, stmt[#stmt]:_toString(opts))
+      insert(res, ' ')
     end
   end
 
   if self.for_update then
-    res[#res + 1] = 'FOR UPDATE '
+    insert(res, 'FOR UPDATE ')
     if self.for_update_tbls then
-      res[#res + 1] = concat(self.for_update_tbls, ', ') .. ' '
+      insert(res, concat(self.for_update_tbls, ', '))
+      insert(res, ' ')
     end
-    if self.no_wait then
-      res[#res + 1] = 'NO WAIT '
-    end
+    if self.no_wait then insert(res, 'NO WAIT ') end
   end
 
   return sub(concat(res), 1, -2)
@@ -770,12 +866,7 @@ function Insert:into(tbl, ...)
     if 'string' == type(values[1]) or 
       (is_array(values[1]) and 'string' == type(values[1][1]))
     then
-
-      self._split_keys_vals_mode, self._values = true, {}
-      local arr = args2array({...})
-      for k=1, #arr do
-        self._values[#self._values + 1] = {key=arr[k]}
-      end
+      self._split_keys_vals_mode, self._values = true, Hash(args2array({...}))
     else
       self:values(...)
     end
@@ -784,49 +875,34 @@ function Insert:into(tbl, ...)
 end
 
 function Insert:values(...)
-  local values = args2array({...})
-  if self._split_keys_vals_mode then
-    --
-    if #values > 0 then
-      if 'table' == type(values[1]) then
-        local y, x = 1, 1
-        while true do
-          if not values[x] then break end
-          if not self._values[y].val then
-            self._values[y].val = {values[x][y]}
-          else
-            self._values[y].val[#self._values[y].val + 1] = values[x][y]
-          end
-          y = y + 1
-          if y > #self._values then x, y = x + 1, 1 end
-        end
-      else
-        for k=1, #values do
-          self._values[k].val = values[k]
-        end
-      end
-    end
-  else
-    local x = 1
-    if not self._values then self._values = {} end
-    if 'table' == type(values[1]) and 'table' == type(values[1][1]) then
-      for k=1, #values[1] do
-        for k, v in pairs(values[1][k]) do
-          if self._values[x] and self._values[x].val then
-            self._values[x].val[#self._values[x].val + 1] = v
-          else
-            self._values[x] = {key=k, val={v}}
-          end
-          x = x + 1
-        end
-        x = 1
+  local values, check = args2array({...}), 0
+  if self._split_keys_vals_mode and #values > 0 then
+    if 'table' == type(values[1]) then
+      check_same_len(#self._values, #values[1])
+      for i=1, #values[1] do self._values.set(self._values, i, {values[1][i]}) end
+      for i=2, #values do
+        check_same_len(#self._values, #values[i])
+        for k=1, #values[i] do self._values.add(self._values, k, values[i][k]) end
       end
     else
-      for k, v in pairs((values[1] or values)) do
-        self._values[#self._values + 1] = {key=k, val=v}
-      end
+      check_same_len(#self._values, #values)
+      for k=1, #values do self._values.set(self._values, k, values[k]) end
     end
+    goto returning
   end
+
+  self._values = self._values or Hash()
+  if 'table' == type(values[1]) and 'table' == type(values[1][1]) then
+    for k,v in pairs(values[1][1]) do self._values[k] = {v} end
+    for i=2, #values[1] do
+      check_same_len(#self._values, #values[1][i])
+      for k,v in pairs(values[1][i]) do self._values.add(self._values, k, v) end
+    end
+  else
+    for k,v in pairs((values[1] or values)) do self._values[k] = v end
+  end
+
+  ::returning::
   return self
 end
 
@@ -844,22 +920,20 @@ end
 
 function Insert:_toString(opts)
   local res = {'INSERT '}
-  if self._or then
-    res[#res + 1] = self._or
-  end
-  res[#res + 1] = format('INTO %s (', concat(self.tbls, ', '))
+  if self._or then insert(res, self._or) end
+  insert(res, format('INTO %s (', concat(self.tbls, ', ')))
   handles(res, self._values, opts, false, false, nil, '')
-  res[#res + 1] = ') '
+  insert(res, ') ')
   if self._select then
-    res[#res + 1] = self._select:_toString(opts)
-    res[#res + 1] = ' '
+    insert(res, self._select:_toString(opts))
+    insert(res, ' ')
   else
-    res[#res + 1] = 'VALUES ('
+    insert(res, 'VALUES (')
     handles(res, self._values, opts, false, true, nil, '')
-    res[#res + 1] = ') '
+    insert(res, ') ')
   end
   if self._returning then
-    res[#res + 1] = 'RETURNING '
+    insert(res, 'RETURNING ')
     handles(res, self._returning, opts)
   end
 
@@ -879,9 +953,7 @@ function Update:__init(expansions, tbl, ...)
   self._aliases = expansions
   self.super.__init(self, 'update')
   self.tbls = {self:expandAlias(tbl)}
-  if ... then
-    self:set(...)
-  end
+  if ... then self:set(...) end
   return self
 end
 
@@ -894,7 +966,10 @@ Update.where      = where
 Update._and       = where
 
 function Update:set(...)
-  return self:_addToObj(args2object({...}), '_values')
+  local args = args2object({...})
+  self._values = self._values or Hash()
+  for k,v in pairs(args) do self._values[k] = v end
+  return self
 end
 
 function Update:values(...)
@@ -903,14 +978,10 @@ end
 
 function Update:_toString(opts)
   local res = {'UPDATE '}
-  if self._or then
-    res[#res + 1] = self._or
-  end
-  res[#res + 1] = format('%s SET ', self.tbls[1])
+  if self._or then insert(res, self._or) end
+  insert(res, format('%s SET ', self.tbls[1]))
   handles(res, self._values, opts, true)
-  if self._where then
-    res[#res + 1] = format('WHERE %s', self:_exprToString(opts))
-  end
+  if self._where then insert(res, format('WHERE %s', self:_exprToString(opts))) end
 
   return sub(concat(res), 1, -2)
 end
@@ -927,17 +998,13 @@ Delete.__name = 'Delete'
 function Delete:__init(expansions, ...)
   self._aliases = expansions
   self.super.__init(self, 'delete')
-  if ... then
-    self.tbls = {self:expandAlias(...)}
-  end
+  if ... then self.tbls = {self:expandAlias(...)} end
   return self
 end
 
 function Delete:from(...)
   local arr = args2array({...})
-  for i=1, #arr do
-    arr[i] = self:expandAlias(arr[i])
-  end
+  for i=1, #arr do arr[i] = self:expandAlias(arr[i]) end
   return self:_add(arr, 'tbls')
 end
 
@@ -946,21 +1013,14 @@ Delete._and  = where
 
 function Delete:using(...)
   local args = args2array({...})
-  for i=1, #args do
-    args[i] = self:expandAlias(args[i])
-  end
+  for i=1, #args do args[i] = self:expandAlias(args[i]) end
   return self:_add(args, '_using')
 end
 
 function Delete:_toString(opts)
   local res = {'DELETE FROM ', self.tbls[1], ' '}
-  if self._using then
-    res[#res + 1] = format('USING %s ', concat(self._using, ', '))
-  end
-  if self._where then
-    res[#res + 1] = format('WHERE %s', self:_exprToString(opts))
-  end
-
+  if self._using then insert(res, format('USING %s ', concat(self._using, ', '))) end
+  if self._where then insert(res, format('WHERE %s', self:_exprToString(opts))) end
   return sub(concat(res), 1, -2)
 end
 
@@ -993,9 +1053,8 @@ function Join:__concat(opts)
     on = on .. opts
   else
     for key, val in pairs(on) do
-      result[#result + 1] =
-        format('%s = %s', handle_column(key, opts), handle_column(val, opts))
-      result[#result + 1] = ' AND '
+      insert(result, format('%s = %s', handle_column(key, opts), handle_column(val, opts)))
+      insert(result, ' AND ')
     end
     result[#result] = nil
     on = concat(result)
@@ -1015,7 +1074,7 @@ function Group:__init(op, expressions)
   self.op, self.expressions = op, {}
   for k in pairs(expressions) do
     if is_expr(expressions[k]) then
-      self.expressions[#self.expressions + 1] = expressions[k]
+      insert(self.expressions, expressions[k])
     else
       obj2equals(expressions[k], self.expressions)
     end
@@ -1029,7 +1088,7 @@ end
 function Group:__concat(opts)
   local res = {}
   for k in pairs(self.expressions) do
-    res[#res + 1] = format("%s %s ", (self.expressions[k] .. opts), self.op)
+    insert(res, format("%s %s ", (self.expressions[k] .. opts), self.op))
   end
   res[#res] = sub(res[#res], 1, (#self.op + 3) * -1)
   if #self.expressions > 1 and (self.parens or self.parens == nil) then
