@@ -1,3 +1,10 @@
+--
+-- Sqlrocks, is a transparent, schemaless library for building and composing SQL statements.
+--
+-- @author    leite (xico@simbio.se)
+-- @license   MIT
+-- @copyright Simbiose 2015
+
 local string, math, table = require 'string', require 'math', require 'table'
 
 local find, match, gmatch, gsub, sub, lower, upper, format, max, floor, concat, insert,
@@ -10,13 +17,13 @@ string, math, table = nil, nil, nil
 
 local reserved = {
   abort=true, action=true, add=true, after=true, all=true, alter=true, analyse=true,
-  analyze=true, ['and']=true, any=true, array=true, as=true, asc=true, 
+  analyze=true, ['and']=true, any=true, array=true, as=true, asc=true,
   asymmetric=true, attach=true, authorization=true, autoincrement=true, before=true,
   begin=true, between=true, both=true, by=true, cascade=true, case=true, cast=true,
   check=true, collate=true, collation=true, column=true, commit=true, conflict=true,
   constraint=true, create=true, cross=true, current_catalog=true, current_date=true,
   current_role=true, current_time=true, current_timestamp=true, current_user=true,
-  database=true, default=true, deferrable=true, deferred=true, delete=true, 
+  database=true, default=true, deferrable=true, deferred=true, delete=true,
   desc=true, detach=true, distinct=true, ['do']=true, drop=true, each=true,
   ['else']=true, ['end']=true, escape=true, except=true, exclusive=true, exists=true,
   explain=true, fail=true, ['false']=true, fetch=true, ['for']=true, foreign=true,
@@ -24,11 +31,11 @@ local reserved = {
   ['if']=true, ignore=true, ilike=true, immediate=true, ['in']=true, index=true,
   indexed=true, initially=true, inner=true, insert=true, instead=true,
   intersect=true, into=true, is=true, isnull=true, join=true, key=true, lateral=true,
-  leading=true, left=true, like=true, limit=true, localtime=true, 
+  leading=true, left=true, like=true, limit=true, localtime=true,
   localtimestamp=true, match=true, natural=true, no=true, ['not']=true, notnull=true,
   null=true, of=true, offset=true, on=true, only=true, ['or']=true, order=true,
   outer=true, over=true, overlaps=true, placing=true, plan=true, pragma=true,
-  primary=true, query=true, raise=true, references=true, regexp=true, reindex=true, 
+  primary=true, query=true, raise=true, references=true, regexp=true, reindex=true,
   release=true, rename=true, replace=true, restrict=true, returning=true, right=true,
   rollback=true, row=true, savepoint=true, ['select']=true, session_user=true,
   set=true, similar=true, some=true, symmetric=true, table=true, temp=true,
@@ -42,84 +49,120 @@ local compounds = {
   intersectAll='INTERSECT ALL', minus='MINUS', minusAll='MINUS ALL',
   except='EXCEPT', exceptAll='EXCEPT ALL'}
 
+local EMPTY, SPACE, DOT, COMA, COMA_SPC, Q_MARK, STAR, PAR_SPC, LT, LE, NOT_EQ,
+  EQ, GT, GE, DOLLAR, QUOTE, QQ, ESP_AND, ESP_AS, _INDEX, _HAVING, I, _RETURNING,
+  USING, WHERE, ALLSPACE, AND, ANYSPACE, COLS, CROSS, DELSPACEFROMSPACE, DEL,
+  FOR_UPDATE, FOR_UPDATE_TBLS, FULL, FUNCTION, GROUPBY, GROUP_BY, HASH, INDEX,
+  INNER, INSERT, IS_NOT_NULL, IS_NULL, LEFT, NO_WAIT, NUMBER, OR_ABORT, OR_FAIL,
+  OR_IGNORE, OR_REPLACE, OR_ROLLBACK, OR, ORDERBY, ORDER_BY, RETURNING, RIGHT,
+  SELECT, _SELECT, STRING, TABLE, TBLS, TEMP, UPDATE, _UPDATE, VALS_P =
+  '', ' ', '.', ',', ', ', '?', '*', ') ', '<', '<=', '<>', '=', '>', '>=', '$',
+  "'", "''", ' AND ', ' AS ', '__index', '_having', '_i', '_returning', '_using',
+  '_where', 'ALL ', 'AND', 'ANY ', 'cols', 'CROSS', 'DELETE FROM ', 'delete',
+  'FOR UPDATE ', 'for_update_tbls', 'FULL', 'function', 'GROUP BY ', 'group_by',
+  'Hash', 'index', 'INNER', 'INSERT ', 'IS NOT NULL', 'IS NULL', 'LEFT', 'NO WAIT ',
+  'number',  'OR ABORT ', 'OR FAIL ', 'OR IGNORE ', 'OR REPLACE ', 'OR ROLLBACK ',
+  'OR', 'ORDER BY ', 'order_by', 'RETURNING ', 'RIGHT', 'SELECT ', 'select', 'string',
+  'table', 'tbls', 'TEMP ', 'UPDATE ', 'update', 'VALUES ('
+
+local patterns = {
+  DQS = '"%s"', CAP1 = '([^%.]+)', DPS = '(%s)', SSPACE = '%s ', SSPACESSSPACE = '%s %s ',
+  SSPACESSSPACESS = '%s %s %s%s', SSPACESSUNDERS = '%s %s_%s', SSPACES = '%s %s',
+  SEQS = '%s = %s', SEQSS = '%s = %s%s', S_BTW_S_AND_S = '%s BETWEEN %s AND %s',
+  S_IN_S = '%s IN (%s)', S_JOIN_S_ON_S = '%s JOIN %s ON %s', S_LIKE_SS = '%s LIKE %s%s',
+  S_SET = '%s SET ', S_S = '%s_%s', CAP2 = '%s*([^%s,$]+)%s*,?$?', SS = '%s%s',
+  S7 = '%s%s%s%s%s%s%s', EXISTS_S = 'EXISTS (%s)', FROM_S = 'FROM %s ', HVG_S = 'HAVING %s',
+  CAP3 = '^([%w%_%-%d]*)%.?([%w%_%-%d]*)%.?([%w%_%-%d]*)%s?[aA]?[sS]?%s?([[%w%_%-%d]*]?)$',
+  EXPECT_VAL_GOT = 'expecting %d values, got %d', INTO_S_P = 'INTO %s (', NOT_S = 'NOT %s',
+  INTO_SS = 'INTO %s%s ', LIMIT_S = 'LIMIT %s ', OFFSET_S = 'OFFSET %s ',
+  USING_S = 'USING %s ', WHERE_S = 'WHERE %s', ESCAPE_Q_S = " ESCAPE '%s'", Q_S_Q = "'%s'",
+  EXPECT_HASH = "expecting hash, got a '%s'", UNSP_N_D =
+  'Unsupported number of tables in pseudo-view: %d'
+}
+
 --
 --
 --
 --
 --
 
-local classes = setmetatable({}, {__mode='k'})
+local class
 
-local function deep_copy(t, dest)
-  local t, r = t or {}, dest or {}
-  for k,v in pairs(t) do
-    if type(v) == 'table' and k ~= '__index' then
-      r[k] = deep_copy(v)
-    else
-      r[k] = v
+do
+
+  local classes = setmetatable({}, {__mode='k'})
+
+  local function deep_copy(t, dest)
+    local t, r = t or {}, dest or {}
+    for k,v in pairs(t) do
+      if type(v) == TABLE and k ~= _INDEX then
+        r[k] = deep_copy(v)
+      else
+        r[k] = v
+      end
+    end
+    return r
+  end
+
+  local function is(self, klass)
+    local m = getmetatable(self)
+    while m do
+      if m == klass then return true end
+      m = m.super
+    end
+    return false
+  end
+
+  local function include(self, ...)
+    if not ... then return end
+    for k,v in pairs(...) do
+      if self[k] then self[k] = nil end
+      self[k] = v
     end
   end
-  return r
-end
 
-local function is(self, klass)
-  local m = getmetatable(self)
-  while m do 
-    if m == klass then return true end
-    m = m.super
-  end
-  return false
-end
-
-local function include(self, ...)
-  if not ... then return end
-  for k,v in pairs(...) do
-    if self[k] then self[k] = nil end
-    self[k] = v
-  end
-end
-
-local function extends(self, ...)
-  local meta = {}
-  if ... then deep_copy(..., deep_copy(self, meta)) else deep_copy(self, meta) end
-  setmetatable(meta, getmetatable(self))
-  return meta
-end
-
-local function new_index(self, key, value)
-  rawset(self, key, value)
-  for i=1, #classes[self] do
-    classes[self][i][key] = value
-  end
-end
-
-local function class(base)
-  local c, mt = {}, {}
-  if type(base) == 'table' then
-    for i,v in pairs(base) do c[i] = v end
-    c.super = base
+  local function extends(self, ...)
+    local meta = {}
+    if ... then deep_copy(..., deep_copy(self, meta)) else deep_copy(self, meta) end
+    setmetatable(meta, getmetatable(self))
+    return meta
   end
 
-  c.__index     = c
-  c.is          = is
-  c.extends     = extends
-  c.include     = include
-  mt.__newindex = new_index
-  classes[c]    = {}
-
-  mt.__call = function(self, ...)
-    local obj = {}
-    setmetatable(obj, c)
-    if c.__init then c.__init(obj, ...) end
-    return obj
+  local function new_index(self, key, value)
+    rawset(self, key, value)
+    for i=1, #classes[self] do
+      classes[self][i][key] = value
+    end
   end
 
-  if c.super then
-    insert(classes[c.super], c)
-  end
+  class = function (base)
+    local c, mt = {}, {}
+    if type(base) == TABLE then
+      for i,v in pairs(base) do c[i] = v end
+      c.super = base
+    end
 
-  setmetatable(c, mt)
-  return c
+    c.__index     = c
+    c.is          = is
+    c.extends     = extends
+    c.include     = include
+    mt.__newindex = new_index
+    classes[c]    = {}
+
+    mt.__call = function(self, ...)
+      local obj = {}
+      setmetatable(obj, c)
+      if c.__init then c.__init(obj, ...) end
+      return obj
+    end
+
+    if c.super then
+      insert(classes[c.super], c)
+    end
+
+    setmetatable(c, mt)
+    return c
+  end
 end
 
 --
@@ -132,10 +175,10 @@ local Hash = class()
 Hash.__name = 'Hash'
 
 function Hash:__init(bootstrap)
-  rawset(self, '_i', 0)
+  rawset(self, I, 0)
   rawset(self, 'index', {})
-  
-  if 'table' ~= type(bootstrap) then return end
+
+  if TABLE ~= type(bootstrap) then return end
   for k,v in pairs(bootstrap) do self.index[k] = v end
 end
 
@@ -171,7 +214,7 @@ function Hash:__pairs()
 end
 
 function Hash:add(index, val)
-  if 'number' == type(index) then
+  if NUMBER == type(index) then
     insert(self.index[self.index[index]], val)
   else
     insert(self.index[index], val)
@@ -195,8 +238,8 @@ function Hash:__len()
 end
 
 function Hash:__sub(hash)
-  if not('table' == type(hash) and hash.__name == 'Hash') then
-    error(format("expecting hash, got a '%s'", type(hash)))
+  if not(TABLE == type(hash) and hash.__name == 'Hash') then
+    error(format(patterns.EXPECT_HASH, type(hash)))
   end
   local new_index = {}
   for i=1, #self.index do
@@ -209,8 +252,8 @@ function Hash:__sub(hash)
 end
 
 function Hash:__add(hash)
-  if not('table' == type(hash) and hash.__name == 'Hash') then
-    error(format("expecting hash, got a '%s'", type(hash)))
+  if not(TABLE == type(hash) and hash.__name == 'Hash') then
+    error(format(patterns.EXPECT_HASH, type(hash)))
   end
   local new_hash = getmetatable(self)(self.index)
   for i=1, #hash.index do
@@ -228,12 +271,12 @@ end
 --
 
 local function clone(orig)
-  local orig_type = type(orig)
-  local copy
-  if 'table' == orig_type and orig.is then
+  local orig_type, copy = type(orig), {}
+  --local copy
+  if TABLE == orig_type and orig.is then
     copy = orig:extends()
-  elseif 'table' == orig_type then
-    copy = {}
+  elseif TABLE == orig_type then
+    --copy = {}
     for orig_key, orig_value in next, orig, nil do
       copy[clone(orig_key)] = clone(orig_value)
     end
@@ -244,7 +287,7 @@ local function clone(orig)
 end
 
 local function is_array(t)
-  if not t or type(t) ~= 'table' then return false end
+  if not t or type(t) ~= TABLE then return false end
   local i = 0
   for _ in pairs(t) do
     i = i + 1
@@ -257,11 +300,11 @@ local function args2array(args)
   if not args then return {} end
   if #args==1 and is_array(args[1]) then
     return args[1]
-  elseif 'string' == type(args[1]) and find(args[1], ',', 1, true) ~= nil then
+  elseif STRING == type(args[1]) and find(args[1], COMA, 1, true) ~= nil then
     local results = {}
-    gsub(args[1], "%s*([^%s,$]+)%s*,?$?", function(st) insert(results, st) end)
+    gsub(args[1], patterns.CAP2, function(st) insert(results, st) end)
     return results
-  elseif 'table' == type(args[1]) and #args==1 then
+  elseif TABLE == type(args[1]) and #args==1 then
     return args[1]
   else
     return args
@@ -269,16 +312,17 @@ local function args2array(args)
 end
 
 local function args2object(args)
-  if 'table' == type(args[1]) then return args[1] end
+  if TABLE == type(args[1]) then return args[1] end
   local obj = {}
   if nil ~= args[1] then obj[args[1]] = args[2] end
   return obj
 end
 
 local function check_same_len(length, expected)
-  if length ~= expected then
-    error(format('expecting %d values, got %d', length, expected))
-  end
+  assert(length == expected, format(patterns.EXPECT_VAL_GOT, length, expected))
+  --if length ~= expected then
+  --  error(format(patterns.EXPECT_VAL_GOT, length, expected))
+  --end
 end
 
 local function convert(col, new_aliases)
@@ -290,7 +334,7 @@ local function convert(col, new_aliases)
   local tbl_alias = col_parts[tbl_ix]
   if new_aliases[tbl_alias] then
     col_parts[tbl_ix] = new_aliases[tbl_alias]
-    return concat(col_parts, '.')
+    return concat(col_parts, DOT)
   end
   return col
 end
@@ -324,10 +368,10 @@ Sql.__name, Val.__name, Statement.__name, Join.__name, Group.__name, Not.__name,
   'Binary', 'Like', 'Between', 'Unary', 'In', 'Exists'
 
 function get_alias(tbl)
-  local sep    = ' AS '
+  local sep    = ESP_AS
   local sep_ix = find(tbl, sep, 1, true)
   if not sep_ix then
-    sep    = ' '
+    sep    = SPACE
     sep_ix = find(tbl, sep, 1, true)
   end
   if sep_ix then return sub(tbl, sep_ix + #sep, -1) end
@@ -335,41 +379,41 @@ function get_alias(tbl)
 end
 
 function get_table(tbl)
-  local sep_ix = find(tbl, ' ', 1, true)
+  local sep_ix = find(tbl, SPACE, 1, true)
   if sep_ix then return sub(tbl, 1, sep_ix - 1) end
   return tbl
 end
 
 local function is_expr(e)
-  return e.is and (e:is(Group) or e:is(Not) or e:is(Binary) or e:is(Unary) or 
+  return e.is and (e:is(Group) or e:is(Not) or e:is(Binary) or e:is(Unary) or
     e:is(In) or e:is(Like) or e:is(Between) or e:is(Exists))
 end
 
 local function handle_value(val, opts)
   local _type = type(val)
-  if 'table' == _type and val.is then
-    if val:is(Statement) then return format('(%s)', val:_toString(opts)) end
+  if TABLE == _type and val.is then
+    if val:is(Statement) then return format(patterns.DPS, val:_toString(opts)) end
     if val:is(Sql) then return tostring(val) end
   end
 
   if opts and opts.parameterized then
     insert(opts.values, val)
-    local prefix = ''
+    local prefix = EMPTY
     if opts.placeholder and opts.placeholder == '%' then
       prefix = '%s'
       opts.value_ix = opts.value_ix + 1
       return prefix
     else
-      prefix = format('%s%s', (opts.placeholder or '$'), tostring(opts.value_ix))
+      prefix = format(patterns.SS, (opts.placeholder or DOLLAR), tostring(opts.value_ix))
       opts.value_ix = opts.value_ix + 1
       return prefix
     end
   end
 
-  if 'string' == _type or 'table' == _type then
+  if STRING == _type or TABLE == _type then
     return format(
-        "'%s'",
-        gsub(tostring('table' == _type and concat(val, ',') or val), "'", "''")
+        patterns.Q_S_Q,
+        gsub(tostring(TABLE == _type and concat(val, COMA) or val), QUOTE, QQ)
       )
   end
 
@@ -378,27 +422,26 @@ end
 
 local function handle_column(expr, opts)
   if expr.is then
-    if expr:is(Statement) then return format('(%s)', expr:_toString(opts)) end
+    if expr:is(Statement) then return format(patterns.DPS, expr:_toString(opts)) end
     if expr:is(Val) then return handle_value(expr.val, opts) end
   end
 
-  local db, tb, fd, al = match(
-    expr, "^([%w%_%-%d]*)%.?([%w%_%-%d]*)%.?([%w%_%-%d]*)%s?[aA]?[sS]?%s?([[%w%_%-%d]*]?)$")
+  local db, tb, fd, al = match(expr, patterns.CAP3)
   if db then
-    local tb_dot, db_dot = '.', '.'
-    if fd == '' and tb == '' then
-      fd = (reserved[lower(db)] and format('"%s"', db) or db)
-      db = '' db_dot = '' tb_dot = ''
-    elseif fd == '' and tb ~= '' then
-      fd, tb = (reserved[lower(tb)] and format('"%s"', tb) or tb),
-        (reserved[lower(db)] and format('"%s"', db) or db) db = '' db_dot = ''
+    local tb_dot, db_dot = DOT, DOT
+    if fd == EMPTY and tb == EMPTY then
+      fd = (reserved[lower(db)] and format(patterns.DQS, db) or db)
+      db = EMPTY db_dot = EMPTY tb_dot = EMPTY
+    elseif fd == EMPTY and tb ~= EMPTY then
+      fd, tb = (reserved[lower(tb)] and format(patterns.DQS, tb) or tb),
+        (reserved[lower(db)] and format(patterns.DQS, db) or db) db = EMPTY db_dot = EMPTY
     else
-      fd, tb, db = (reserved[lower(fd)] and format('"%s"', fd) or fd), 
-        (reserved[lower(tb)] and format('"%s"', tb) or tb),
-        (reserved[lower(db)] and format('"%s"', db) or db)
+      fd, tb, db = (reserved[lower(fd)] and format(patterns.DQS, fd) or fd),
+        (reserved[lower(tb)] and format(patterns.DQS, tb) or tb),
+        (reserved[lower(db)] and format(patterns.DQS, db) or db)
     end
     return format(
-      "%s%s%s%s%s%s%s", db, db_dot, tb, tb_dot, fd, (al == '' and '' or ' AS '), al)
+      patterns.S7, db, db_dot, tb, tb_dot, fd, (al == EMPTY and EMPTY or ESP_AS), al)
   end
   return expr
 end
@@ -412,22 +455,22 @@ end
 local function handles(res, data, opts, ...)
   local both, value, appends, addendum = ...
   both, value, appends, addendum =
-    (both or false), (value or false), (appends or ', '), (addendum or ' ')
+    (both or false), (value or false), (appends or COMA_SPC), (addendum or SPACE)
 
   if both then
     for k,v in pairs(data) do
       insert(res, format(
-        '%s = %s%s', handle_column(k, opts), handle_value(v, opts), appends))
+        patterns.SEQSS, handle_column(k, opts), handle_value(v, opts), appends))
     end
-    res[#res] = format('%s%s', sub(res[#res], 1, ((#appends + 1) * -1)), addendum)
+    res[#res] = format(patterns.SS, sub(res[#res], 1, ((#appends + 1) * -1)), addendum)
     return res
   end
 
   if value then
-    if data.is and data.is(data, Hash) and 'table' == type(data.get(data, 1)) then
+    if data.is and data.is(data, Hash) and TABLE == type(data.get(data, 1)) then
       for i=1, #data.get(data, 1) do
         for k,v in pairs(data) do
-          insert(res, format('%s%s', handle_value(v[i], opts), appends))
+          insert(res, format(patterns.SS, handle_value(v[i], opts), appends))
         end
         res[#res] = format('%s), (', sub(res[#res], 1, -3))
       end
@@ -435,23 +478,23 @@ local function handles(res, data, opts, ...)
       return res
     end
     for k, v in pairs(data) do
-      insert(res, format('%s%s', handle_value(v, opts), appends))
+      insert(res, format(patterns.SS, handle_value(v, opts), appends))
     end
   else
     for key in pairs(data) do
-      if 'number' == type(key) then
+      if NUMBER == type(key) then
         for k,v in pairs(data) do
-          insert(res, format('%s%s', handle_column(v, opts), appends))
+          insert(res, format(patterns.SS, handle_column(v, opts), appends))
         end
       else
         for k in pairs(data) do
-          insert(res, format('%s%s', handle_column(k, opts), appends))
+          insert(res, format(patterns.SS, handle_column(k, opts), appends))
         end
       end
       break
     end
   end
-  res[#res] = format('%s%s', sub(res[#res], 1, ((#appends + 1) * -1)), addendum)
+  res[#res] = format(patterns.SS, sub(res[#res], 1, ((#appends + 1) * -1)), addendum)
   return res
 end
 
@@ -462,44 +505,44 @@ end
 --
 
 local function _and(...)            return Group('AND', args2array({...}))  end
-local function _or(...)             return Group('OR', args2array({...}))   end
+local function _or(...)             return Group(OR, args2array({...}))   end
 local function isNull(col)          return Unary('IS NULL', col)            end
 local function isNotNull(col)       return Unary('IS NOT NULL', col)        end
 local function innerJoin(self, ...) return self:_addJoins({...}, 'INNER')   end
 local function leftJoin(self, ...)  return self:_addJoins({...}, 'LEFT')    end
-local function rightJoin(self, ...) return self:_addJoins({...}, 'RIGHT')   end
-local function fullJoin(self, ...)  return self:_addJoins({...}, 'FULL')    end
+local function rightJoin(self, ...) return self:_addJoins({...}, RIGHT)   end
+local function fullJoin(self, ...)  return self:_addJoins({...}, FULL)    end
 local function where(self, ...) return self:_addExpression({...}, '_where') end
-local function group(self, ...) return self:_addListArgs({...}, 'group_by') end
-local function order(self, ...) return self:_addListArgs({...}, 'order_by') end
-local function orReplace(self)    self._or = 'OR REPLACE '  return self end
-local function orRollback(self)   self._or = 'OR ROLLBACK ' return self end
-local function orAbort(self)      self._or = 'OR ABORT '    return self end
-local function orFail(self)       self._or = 'OR FAIL '     return self end
-local function orIgnore(self)     self._or = 'OR IGNORE '   return self end
-local function eq(col, val)       return Binary('=', col, val)          end
-local function eqAll(col, val)    return Binary('=', col, val, 'ALL ')  end
-local function eqAny(col, val)    return Binary('=', col, val, 'ANY ')  end
-local function notEq(col, val)    return Binary('<>', col, val)         end
-local function notEqAll(col, val) return Binary('<>', col, val, 'ALL ') end
-local function notEqAny(col, val) return Binary('<>', col, val, 'ANY ') end
-local function lt(col, val)       return Binary('<', col, val)          end
-local function ltAll(col, val)    return Binary('<', col, val, 'ALL ')  end
-local function ltAny(col, val)    return Binary('<', col, val, 'ANY ')  end
-local function le(col, val)       return Binary('<=', col, val)         end
-local function leAll(col, val)    return Binary('<=', col, val, 'ALL ') end
-local function leAny(col, val)    return Binary('<=', col, val, 'ANY ') end
-local function gt(col, val)       return Binary('>', col, val)          end
-local function gtAll(col, val)    return Binary('>', col, val, 'ALL ')  end
-local function gtAny(col, val)    return Binary('>', col, val, 'ANY ')  end
-local function ge(col, val)       return Binary('>=', col, val)         end
-local function geAll(col, val)    return Binary('>=', col, val, 'ALL ') end
-local function geAny(col, val)    return Binary('>=', col, val, 'ANY ') end
+local function group(self, ...) return self:_addListArgs({...}, GROUP_BY) end
+local function order(self, ...) return self:_addListArgs({...}, ORDER_BY) end
+local function orReplace(self)    self._or = OR_REPLACE  return self end
+local function orRollback(self)   self._or = OR_ROLLBACK return self end
+local function orAbort(self)      self._or = OR_ABORT    return self end
+local function orFail(self)       self._or = OR_FAIL     return self end
+local function orIgnore(self)     self._or = OR_IGNORE   return self end
+local function eq(col, val)       return Binary(EQ, col, val)          end
+local function eqAll(col, val)    return Binary(EQ, col, val, 'ALL ')  end
+local function eqAny(col, val)    return Binary(EQ, col, val, 'ANY ')  end
+local function notEq(col, val)    return Binary(NOT_EQ, col, val)         end
+local function notEqAll(col, val) return Binary(NOT_EQ, col, val, 'ALL ') end
+local function notEqAny(col, val) return Binary(NOT_EQ, col, val, 'ANY ') end
+local function lt(col, val)       return Binary(LT, col, val)          end
+local function ltAll(col, val)    return Binary(LT, col, val, 'ALL ')  end
+local function ltAny(col, val)    return Binary(LT, col, val, 'ANY ')  end
+local function le(col, val)       return Binary(LE, col, val)         end
+local function leAll(col, val)    return Binary(LE, col, val, 'ALL ') end
+local function leAny(col, val)    return Binary(LE, col, val, 'ANY ') end
+local function gt(col, val)       return Binary(GT, col, val)          end
+local function gtAll(col, val)    return Binary(GT, col, val, 'ALL ')  end
+local function gtAny(col, val)    return Binary(GT, col, val, 'ANY ')  end
+local function ge(col, val)       return Binary(GE, col, val)         end
+local function geAll(col, val)    return Binary(GE, col, val, 'ALL ') end
+local function geAny(col, val)    return Binary(GE, col, val, 'ANY ') end
 local function into(self, tbl)     self._into = tbl return self end
 local function intoTemp(self, tbl) self._into_tmp = true return self:into(tbl) end
 local function forUpdate(self, ...)
   self.for_update = true
-  return self:_addListArgs({...}, 'for_update_tbls')
+  return self:_addListArgs({...}, FOR_UPDATE_TBLS)
 end
 
 local function obj2equals(obj, expressions)
@@ -544,9 +587,9 @@ function Statement:toParams(opts)
   local sql, result = (self .. opts), {}
   local vv, vk      = next(opts.values)
 
-  if 'table' == type(vk) then
+  if TABLE == type(vk) then
     for _, key in pairs(opts.values) do
-      insert(result, (key.is and tostring(key) or concat(key, ',')))
+      insert(result, (key.is and tostring(key) or concat(key, COMA)))
     end
   else
     for i=1, #opts.values do
@@ -572,13 +615,13 @@ function Statement:_exprToString(opts, expr)
   if expr.expressions and #expr.expressions == 1 then
     expr.expressions[1].parens = false
   end
-  return format('%s ', (expr .. opts))
+  return format(patterns.SSPACE, (expr .. opts))
 end
 
 function Statement:_add(arr, name)
   if not self[name] then self[name] = {} end
 
-  if 'table' == type(arr) and not arr.is then
+  if TABLE == type(arr) and not arr.is then
     for i=1, #arr do insert(self[name], arr[i]) end
   else
     insert(self[name], arr)
@@ -593,7 +636,7 @@ end
 
 function Statement:_addExpression(args, name)
   if not self[name] then self[name] = _and() end
-  if #args==2 and 'table' ~= type(args[1]) and 'table' ~= type(args[2]) or 
+  if #args==2 and TABLE ~= type(args[1]) and TABLE ~= type(args[2]) or
    (#args==2 and args[1].is and (args[1]:is(Sql) or args[1]:is(Val)) or
    args[2] and args[2].is and (args[2]:is(Sql) or args[2]:is(Val))) then
     insert(self[name].expressions, eq(args[1], args[2]))
@@ -613,7 +656,7 @@ function Statement:_addJoins(args, _type)
   if not self.joins then self.joins = {} end
   local tbls, on
 
-  if 'table' == type(args[2]) then
+  if TABLE == type(args[2]) then
     tbls, on = {args[1]}, args[2]
   else
     tbls = args2array(args)
@@ -631,7 +674,7 @@ function Statement:_addJoins(args, _type)
 end
 
 function Statement:expandAlias(tbl)
-  return self._aliases[tbl] and format('%s %s', self._aliases[tbl], tbl) or tbl
+  return self._aliases[tbl] and format(patterns.SSPACES, self._aliases[tbl], tbl) or tbl
 end
 
 --
@@ -644,7 +687,7 @@ Select = class(Statement)
 Select.__name = 'Select'
 
 function Select:__init(...)
-  self.super.__init(self, 'select')
+  self.super.__init(self, _SELECT)
   return self:select(...)
 end
 
@@ -677,7 +720,7 @@ function Select:on(...)
 end
 
 function Select:having(...)
-  return self:_addExpression({...}, '_having')
+  return self:_addExpression({...}, _HAVING)
 end
 
 function Select:limit(count)
@@ -700,7 +743,7 @@ function Select:from(...)
   for i=1, #arr do
     arr[i] = self:expandAlias(arr[i])
   end
-  return self:_add(arr, 'tbls')
+  return self:_add(arr, TBLS)
 end
 
 Select.into           = into
@@ -727,7 +770,7 @@ Select.orderBy        = order
 for key, value in pairs(compounds) do
   Select[key] = function(self, ...)
     local stmts, stmt = args2array({...})
-    if 'table' == type(stmts) and #stmts == 0 and not stmts.is then
+    if TABLE == type(stmts) and #stmts == 0 and not stmts.is then
       stmt = Select()
       stmt.prev_stmt, stmt._aliases, stmt._views, stmt._joinCriteria =
         self, self._aliases, self._views, self._joinCriteria
@@ -746,17 +789,17 @@ end
 function Select:joinView(view, on, _type)
   local alias, view_name = get_alias(view), get_table(view)
   local view             = self._views[view_name]
-  local tbl              = format('%s %s', get_table(view.tbls[1]), alias)
+  local tbl              = format(patterns.SSPACES, get_table(view.tbls[1]), alias)
   local new_aliases      = {[get_alias(view.tbls[1])] = alias}
 
   self:_addJoins({tbl, (on or {})}, (_type and upper(_type) or 'INNER'))
 
   if view.joins then
-    local j_alias, j_tbl, _tbl  = '', '', ''
+    local j_alias, j_tbl, _tbl  = EMPTY, EMPTY, EMPTY
     for i=1, #view.joins do
       j_alias, j_tbl = get_alias(view.joins[i].tbl), get_table(view.joins[i].tbl)
-      new_aliases[j_alias] = format('%s_%s', alias, j_alias)
-      _tbl = format('%s %s_%s', j_tbl, alias, j_alias)
+      new_aliases[j_alias] = format(patterns.S_S, alias, j_alias)
+      _tbl = format(patterns.SSPACESSUNDERS, j_tbl, alias, j_alias)
       local join =
         Join(_tbl, view.joins[i].left_tbl, view.joins[i].on, view.joins[i].type)
       join._joinCriteria = self._joinCriteria
@@ -778,59 +821,59 @@ function Select:joinView(view, on, _type)
 end
 
 function Select:_toString(opts)
-  local cols, res = (#self.cols > 0 and self.cols or {'*'}), {'SELECT '}
+  local cols, res = (#self.cols > 0 and self.cols or {STAR}), {SELECT}
   if self._distinct then insert(res, 'DISTINCT ') end
   handles(res, cols, opts)
   if self._into then
-    insert(res, format('INTO %s%s ', (self._into_tmp and 'TEMP ' or ''), self._into))
+    insert(res, format(patterns.INTO_SS, (self._into_tmp and TEMP or EMPTY), self._into))
   end
   if self.tbls then
-    insert(res, format('FROM %s ', concat(self.tbls, ', ')))
+    insert(res, format(patterns.FROM_S, concat(self.tbls, COMA_SPC)))
   end
   if self.joins then
     for i=1, #self.joins do
-      insert(res, format('%s ', (self.joins[i] .. opts)))
+      insert(res, format(patterns.SSPACE, (self.joins[i] .. opts)))
     end
   end
   if self._where then
-    insert(res, format('WHERE %s', self:_exprToString(opts)))
+    insert(res, format(patterns.WHERE_S, self:_exprToString(opts)))
   end
   if self.group_by then
-    insert(res, 'GROUP BY ')
+    insert(res, GROUPBY)
     handles(res, self.group_by, opts)
   end
   if self._having then
-    insert(res, format('HAVING %s', self:_exprToString(opts, self._having)))
+    insert(res, format(patterns.HVG_S, self:_exprToString(opts, self._having)))
   end
   if self.order_by then
-    insert(res, 'ORDER BY ')
+    insert(res, ORDERBY)
     handles(res, self.order_by, opts)
   end
   if self._limit then
-    insert(res, format('LIMIT %s ', tostring(self._limit)))
+    insert(res, format(patterns.LIMIT_S, tostring(self._limit)))
   end
   if self._offset then
-    insert(res, format('OFFSET %s ', tostring(self._offset)))
+    insert(res, format(patterns.OFFSET_S, tostring(self._offset)))
   end
 
   for key, value in pairs(compounds) do
     local stmt = self['_' .. key]
     if stmt and #stmt > 0 then
       insert(res, value)
-      insert(res, ' ')
+      insert(res, SPACE)
       for i=1, (#stmt - 1) do
-        insert(res, format('%s %s ', stmt[i]:_toString(opts), value))
+        insert(res, format(patterns.SSPACESSSPACE, stmt[i]:_toString(opts), value))
       end
       insert(res, stmt[#stmt]:_toString(opts))
-      insert(res, ' ')
+      insert(res, SPACE)
     end
   end
 
   if self.for_update then
-    insert(res, 'FOR UPDATE ')
+    insert(res, FOR_UPDATE)
     if self.for_update_tbls then
-      insert(res, concat(self.for_update_tbls, ', '))
-      insert(res, ' ')
+      insert(res, concat(self.for_update_tbls, COMA_SPC))
+      insert(res, SPACE)
     end
     if self.no_wait then insert(res, 'NO WAIT ') end
   end
@@ -863,8 +906,8 @@ function Insert:into(tbl, ...)
   if tbl then self.tbls = {self:expandAlias(tbl)} end
   local values = {...}
   if #values > 0 then
-    if 'string' == type(values[1]) or 
-      (is_array(values[1]) and 'string' == type(values[1][1]))
+    if STRING == type(values[1]) or
+      (is_array(values[1]) and STRING == type(values[1][1]))
     then
       self._split_keys_vals_mode, self._values = true, Hash(args2array({...}))
     else
@@ -877,7 +920,7 @@ end
 function Insert:values(...)
   local values, check = args2array({...}), 0
   if self._split_keys_vals_mode and #values > 0 then
-    if 'table' == type(values[1]) then
+    if TABLE == type(values[1]) then
       check_same_len(#self._values, #values[1])
       for i=1, #values[1] do self._values.set(self._values, i, {values[1][i]}) end
       for i=2, #values do
@@ -892,7 +935,7 @@ function Insert:values(...)
   end
 
   self._values = self._values or Hash()
-  if 'table' == type(values[1]) and 'table' == type(values[1][1]) then
+  if TABLE == type(values[1]) and TABLE == type(values[1][1]) then
     for k,v in pairs(values[1][1]) do self._values[k] = {v} end
     for i=2, #values[1] do
       check_same_len(#self._values, #values[1][i])
@@ -907,7 +950,7 @@ function Insert:values(...)
 end
 
 function Insert:select(...)
-  self._select = Select(...)  
+  self._select = Select(...)
   self._select._aliases, self._select._views, self._select._joinCriteria =
     self._aliases, self._views, self._joinCriteria
   self._select.prev_stmt = self
@@ -915,25 +958,25 @@ function Insert:select(...)
 end
 
 function Insert:returning(...)
-  return self._addListArgs({...}, '_returning')
+  return self._addListArgs({...}, _RETURNING)
 end
 
 function Insert:_toString(opts)
   local res = {'INSERT '}
   if self._or then insert(res, self._or) end
-  insert(res, format('INTO %s (', concat(self.tbls, ', ')))
-  handles(res, self._values, opts, false, false, nil, '')
-  insert(res, ') ')
+  insert(res, format(patterns.INTO_S_P, concat(self.tbls, COMA_SPC)))
+  handles(res, self._values, opts, false, false, nil, EMPTY)
+  insert(res, PAR_SPC)
   if self._select then
     insert(res, self._select:_toString(opts))
-    insert(res, ' ')
+    insert(res, SPACE)
   else
-    insert(res, 'VALUES (')
-    handles(res, self._values, opts, false, true, nil, '')
-    insert(res, ') ')
+    insert(res, VALS_P)
+    handles(res, self._values, opts, false, true, nil, EMPTY)
+    insert(res, PAR_SPC)
   end
   if self._returning then
-    insert(res, 'RETURNING ')
+    insert(res, RETURNING)
     handles(res, self._returning, opts)
   end
 
@@ -951,7 +994,7 @@ Update.__name = 'Update'
 
 function Update:__init(expansions, tbl, ...)
   self._aliases = expansions
-  self.super.__init(self, 'update')
+  self.super.__init(self, _UPDATE)
   self.tbls = {self:expandAlias(tbl)}
   if ... then self:set(...) end
   return self
@@ -977,11 +1020,11 @@ function Update:values(...)
 end
 
 function Update:_toString(opts)
-  local res = {'UPDATE '}
+  local res = {UPDATE}
   if self._or then insert(res, self._or) end
-  insert(res, format('%s SET ', self.tbls[1]))
+  insert(res, format(patterns.S_SET, self.tbls[1]))
   handles(res, self._values, opts, true)
-  if self._where then insert(res, format('WHERE %s', self:_exprToString(opts))) end
+  if self._where then insert(res, format(patterns.WHERE_S, self:_exprToString(opts))) end
 
   return sub(concat(res), 1, -2)
 end
@@ -1005,7 +1048,7 @@ end
 function Delete:from(...)
   local arr = args2array({...})
   for i=1, #arr do arr[i] = self:expandAlias(arr[i]) end
-  return self:_add(arr, 'tbls')
+  return self:_add(arr, TBLS)
 end
 
 Delete.where = where
@@ -1014,13 +1057,13 @@ Delete._and  = where
 function Delete:using(...)
   local args = args2array({...})
   for i=1, #args do args[i] = self:expandAlias(args[i]) end
-  return self:_add(args, '_using')
+  return self:_add(args, USING)
 end
 
 function Delete:_toString(opts)
-  local res = {'DELETE FROM ', self.tbls[1], ' '}
-  if self._using then insert(res, format('USING %s ', concat(self._using, ', '))) end
-  if self._where then insert(res, format('WHERE %s', self:_exprToString(opts))) end
+  local res = {'DELETE FROM ', self.tbls[1], SPACE}
+  if self._using then insert(res, format(patterns.USING_S, concat(self._using, COMA_SPC))) end
+  if self._where then insert(res, format(patterns.WHERE_S, self:_exprToString(opts))) end
   return sub(concat(res), 1, -2)
 end
 
@@ -1053,13 +1096,13 @@ function Join:__concat(opts)
     on = on .. opts
   else
     for key, val in pairs(on) do
-      insert(result, format('%s = %s', handle_column(key, opts), handle_column(val, opts)))
-      insert(result, ' AND ')
+      insert(result, format(patterns.SEQS, handle_column(key, opts), handle_column(val, opts)))
+      insert(result, ESP_AND)
     end
     result[#result] = nil
     on = concat(result)
   end
-  return format('%s JOIN %s ON %s', self.type, self.tbl, on)
+  return format(patterns.S_JOIN_S_ON_S, self.type, self.tbl, on)
 end
 
 function Join:__tostring() return self:__concat({}) end
@@ -1114,7 +1157,7 @@ function Not:clone()
 end
 
 function Not:__concat(opts)
-  return format('NOT %s', self.expressions[1] .. opts)
+  return format(patterns.NOT_S, self.expressions[1] .. opts)
 end
 
 function Not:__tostring() return self:__concat({}) end
@@ -1127,7 +1170,7 @@ function Not:__tostring() return self:__concat({}) end
 
 function Binary:__init(op, col, val, ...)
   self.op, self.col, self.val, self.quantifier =
-    op, col, val, (... or '')
+    op, col, val, (... or EMPTY)
 end
 
 function Binary:clone()
@@ -1135,7 +1178,7 @@ function Binary:clone()
 end
 
 function Binary:__concat(opts)
-  return format('%s %s %s%s', handle_column(self.col, opts), self.op,
+  return format(patterns.SSPACESSSPACESS, handle_column(self.col, opts), self.op,
     self.quantifier, handle_value(self.val, opts))
 end
 
@@ -1157,8 +1200,8 @@ end
 
 function Like:__concat(opts)
   return format(
-      '%s LIKE %s%s', handle_column(self.col, opts), handle_value(self.val, opts),
-      (self.escape_char and format(" ESCAPE '%s'", self.escape_char) or '')
+      patterns.S_LIKE_SS, handle_column(self.col, opts), handle_value(self.val, opts),
+      (self.escape_char and format(patterns.ESCAPE_Q_S, self.escape_char) or EMPTY)
     )
 end
 
@@ -1179,7 +1222,7 @@ function Between:clone()
 end
 
 function Between:__concat(opts)
-  return format('%s BETWEEN %s AND %s', handle_column(self.col, opts),
+  return format(patterns.S_BTW_S_AND_S, handle_column(self.col, opts),
     handle_value(self.val1, opts), handle_value(self.val2, opts))
 end
 
@@ -1200,7 +1243,7 @@ function Unary:clone()
 end
 
 function Unary:__concat(opts)
-  return format('%s %s', handle_column(self.col, opts), self.op)
+  return format(patterns.SSPACES, handle_column(self.col, opts), self.op)
 end
 
 function Unary:__tostring() return self:__concat({}) end
@@ -1213,7 +1256,7 @@ function Unary:__tostring() return self:__concat({}) end
 
 function In:__init(col, ...)
   self.col, self.list = col, ...
-  self.list = 'table' ~= type(self.list) and {...} or self.list
+  self.list = TABLE ~= type(self.list) and {...} or self.list
 end
 
 function In:clone()
@@ -1221,14 +1264,14 @@ function In:clone()
 end
 
 function In:__concat(opts)
-  local res = ''
+  local res = EMPTY
   if is_array(self.list) then
     res = sub(concat(handles({}, self.list, opts, false, true)), 1, -2)
   elseif self.list.is and self.list:is(Statement) then
     res = self.list:_toString(opts)
   end
 
-  return format('%s IN (%s)', handle_column(self.col, opts), res)
+  return format(patterns.S_IN_S, handle_column(self.col, opts), res)
 end
 
 function In:__tostring() return self:__concat({}) end
@@ -1248,7 +1291,7 @@ function Exists:clone()
 end
 
 function Exists:__concat(opts)
-  return format('EXISTS (%s)', self.subquery:_toString(opts))
+  return format(patterns.EXISTS_S, self.subquery:_toString(opts))
 end
 
 function Exists:__tostring() return self:__concat({}) end
@@ -1286,9 +1329,9 @@ SQLRocks.__index = SQLRocks
 
 function SQLRocks:__call(_expansions, _criteria, _views)
   local expansions, criteria, views, this =
-    ('table'    == type(_expansions) and _expansions or {}),
-    ('function' == type(_criteria)   and _criteria   or nil),
-    ('table'    == type(_views)      and _views      or {}),
+    (TABLE    == type(_expansions) and _expansions or {}),
+    (FUNCTION == type(_criteria)   and _criteria   or nil),
+    (TABLE    == type(_views)      and _views      or {}),
     {
       val       = Val,       sql    = Sql,    _and     = _and,     _or    = _or,
       _not      = Not,       like   = Like,   between  = Between,  isNull = isNull,
@@ -1302,7 +1345,7 @@ function SQLRocks:__call(_expansions, _criteria, _views)
 
   this.addView = function(name, sel)
     if #sel.tbls ~= 1 then
-      error(format('Unsupported number of tables in pseudo-view: %d', #sel.tbls))
+      error(format(patterns.UNSP_N_D, #sel.tbls))
     end
     views[name] = sel
   end
@@ -1319,7 +1362,7 @@ function SQLRocks:__call(_expansions, _criteria, _views)
     function(...)
       local ins = Insert(expansions, ...)
       ins._views, ins._joinCriteria = views, criteria
-      return ins 
+      return ins
     end,
     function(...) return Update(expansions, ...) end,
     function(...) return Delete(expansions, ...) end,
