@@ -147,7 +147,7 @@
 
         <h1 id="introduction">Introduction</h1>
 
-        <p><a href="https://travis-ci.org/CSNW/sql-bricks" title="Build Status"><img src="https://travis-ci.org/CSNW/sql-bricks.png?branch=master"></a></p>
+        <!-- <p><a href="https://travis-ci.org/CSNW/sql-bricks" title="Build Status"><img src="https://travis-ci.org/CSNW/sql-bricks.png?branch=master"></a></p> -->
         <p >As with other SQL generation libraries, SQL Rocks was created to help eliminate DRY violations in SQL-heavy applications.
         SQL statements can be easily stored, cloned, modified and passed around to other parts of an application and they can generate both parameterized and non-parameterized SQL.</p>
         <p>In addition, SQL Rocks contains a few conveniences to aid in re-use and to make SQL generation a little less of a chore: 
@@ -201,7 +201,7 @@
 
         <h2 id="statement">Statement</h2>
 
-        <p><span class="teletype" >Statement</span> is an abstract base class for all statements (<span class="teletype" >SELECT, INSERT, UPDATE, DELETE</span>) and should never be instantiated directly. It is exposed because it can be used with the <span class="teletype" >instanceof</span> operator to easily determine whether something is a SQL Rocks statement: <span class="teletype" >my_var instanceof Statement</span>.</p>
+        <p><span class="teletype" >Statement</span> is an abstract base class for all statements (<span class="teletype" >SELECT, INSERT, UPDATE, DELETE</span>) and should never be instantiated directly. It is exposed because it can be used with the <span class="teletype" >:is(object)</span> operator to easily determine whether something is a SQL Rocks statement: <span class="teletype" >my_var:is(Statement)</span>.</p>
 
         <p id="clone">
           <b class="header">clone</b><code>stmt:clone()</code>
@@ -227,7 +227,7 @@
           <b class="header">toParams</b><code>stmt:toParams(options)</code>
         </p>
 
-        <p>Returns an object with two properties: a parameterized <span class="teletype" >text</span> string and a <span class="teletype" >values</span> array. The values are populated with anything on the right-hand side of a <span class="teletype" >WHERE</span> criteria, as well as any values passed into an <span class="teletype" >insert()</span> or <span class="teletype" >update()</span> (they can be passed explicitly with <span class="teletype" >val()</span> or opted out of with <span class="teletype" >sql.sql()</span>):</p>
+        <p>Returns a table with two properties: a parameterized <span class="teletype" >text</span> string and a <span class="teletype" >values</span> table. The values are populated with anything on the right-hand side of a <span class="teletype" >WHERE</span> criteria, as well as any values passed into an <span class="teletype" >insert()</span> or <span class="teletype" >update()</span> (they can be passed explicitly with <span class="teletype" >val()</span> or opted out of with <span class="teletype" >sql.sql()</span>):</p>
         <pre>
           <code class="language-lua">
   update('users', {first_name='Fred'}):where({last_name='Flintstone'}):toParams()
@@ -927,12 +927,6 @@ THE SOFTWARE.
 
         <br /><br />
 
-<!--
-        <h2 id="acknowledgments">Acknowledgments</h2>
-
-        <p>Huge thanks to <a href="https://github.com/brianc">Brian C</a> for his hard work supporting and maintaining <a href="https://github.com/brianc/node-sql">node-sql</a> and <a href="https://github.com/brianc/node-postgres">node-postgres</a> and especially for his patience with me and my pull requests.</p>
-        <p>Also, thanks to <a href="https://github.com/jashkenas">jashkenas</a> for <a href="https://github.com/jashkenas/underscore">underscore</a>, which SQL Rocks depends on -- and for its documentation, which served as a model and template for these docs.</p>
--->
       </div>
 
         <div class="col-md-3">
