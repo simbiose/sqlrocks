@@ -1,0 +1,28 @@
+language: c
+
+sudo: false
+
+env:
+  global:
+    - LUAROCKS=2.2.2
+  matrix:
+    - LUA=lua5.1
+    - LUA=lua5.2
+    - LUA=luajit
+    - LUA=luajit2.0
+    - LUA=luajit2.1
+
+branches:
+  only:
+    - master
+
+before_install:
+  - source .travis/setenv_lua.sh
+  - luarocks install busted
+
+script: "busted -o TAP"
+
+notifications:
+  email:
+    on_success: change
+    on_failure: always
