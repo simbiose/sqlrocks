@@ -1,3 +1,6 @@
+[![Build Status](https://travis-ci.org/simbiose/sqlrocks.png?branch=master)](https://travis-ci.org/simbiose/sqlrocks)
+[![License](http://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
+
 # sqlrocks
 
 is a transparent, schemaless library for building and composing SQL statements.
