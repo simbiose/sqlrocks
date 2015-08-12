@@ -1,5 +1,5 @@
 [![Build Status](https://travis-ci.org/simbiose/sqlrocks.png?branch=master)](https://travis-ci.org/simbiose/sqlrocks)
-[![License](http://img.shields.io/badge/License-MIT-brightgreen.svg)](LICENSE)
+[![License](http://img.shields.io/badge/License-MIT-red.svg)](LICENSE)
 
 # sqlrocks
 

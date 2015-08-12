@@ -320,9 +320,6 @@ end
 
 local function check_same_len(length, expected)
   assert(length == expected, format(patterns.EXPECT_VAL_GOT, length, expected))
-  --if length ~= expected then
-  --  error(format(patterns.EXPECT_VAL_GOT, length, expected))
-  --end
 end
 
 local function convert(col, new_aliases)

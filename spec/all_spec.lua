@@ -4,9 +4,9 @@ local ins, say, json, string, table =
 local _select, type, tostring, format, concat, remove =
   select, type, tostring, string.format, table.concat, table.remove
 
-local sql, val, select, insertInto, insert, update, delete, _and, _or, like, _not, 
+local sql, val, select, insertInto, insert, update, delete, _and, _or, like, _not,
   _in, isNull, isNotNull, equal, eq, lt, le, gt, ge, between, exists, eqAny,
-  notEqAny, union, res, sel, _ins = 
+  notEqAny, union, res, sel, _ins =
   ins.sql, ins.val, ins.select, ins.insertInto, ins.insert, ins.update, ins.delete,
   ins._and, ins._or, ins.like, ins._not, ins._in, ins.isNull, ins.isNotNull,
   ins.equal, ins.eq, ins.lt, ins.le, ins.gt, ins.ge, ins.between, ins.exists,
@@ -21,17 +21,25 @@ ins.joinCriteria(function(l_tbl, l_alias, r_tbl, r_alias)
 end)
 
 local function extended_same(state, arguments)
-  local compare_to = arguments[1] remove(arguments, 1)
-  local size_of    = #arguments
-  if size_of == 1 or 'string' ~= type(compare_to) then
+  local compare_to = arguments[1]
+  remove(arguments, 1)
+  local size_of, ok = #arguments, 1
+
+  if size_of == 1 then --or 'string' ~= type(compare_to) then print(' here ! ')
     return state.mod == (compare_to == arguments[1])
   else
-    local ok = 1
+    if 'table' == type(compare_to) then
+      for i=1, size_of do
+        ok = json.encode(compare_to) == json.encode(arguments[i]) and i or ok
+      end
+      return state.mod == (json.encode(compare_to) == json.encode(arguments[ok]))
+    end
+
     for i=1, size_of do
-      ok = (compare_to == arguments[i] and i or ok)
+      ok = compare_to == arguments[i] and i or ok
     end
     return state.mod == (compare_to == arguments[ok])
-  end  
+  end
 end
 
 say:set("assertion.esame.positive", "Expected %s to be equal to\n%s")
@@ -40,7 +48,7 @@ assert:register("assertion", "esame", extended_same, "assertion.esame.positive",
 
 local function check_params(state, arguments) --instance, text, values)
   local result = arguments[1]:toParams()
-  if not extended_same({mod=true}, {result.text, 
+  if not extended_same({mod=true}, {result.text,
     ('table' == type(arguments[2]) and unpack(arguments[2]) or arguments[2])})
   then
     if 'table' == type(arguments[2]) then
@@ -80,8 +88,9 @@ describe('deep Statement.clone()', function()
   it('should deep clone .join()', function()
     sel = select():from('user'):join('addr')
     sel:clone():join('psn')
-    assert.are.same(tostring(sel), 
-      'SELECT * FROM user INNER JOIN address addr ON "user".addr_fk = addr.pk')
+    assert.are.same(
+      tostring(sel), 'SELECT * FROM user INNER JOIN address addr ON "user".addr_fk = addr.pk'
+    )
   end)
 
   it('should clone values', function()
@@ -223,13 +232,18 @@ end)
 describe('sql update', function()
   it('should generate an update statement', function()
     res = update('users', {name='Chico', sex='male'})
-    assert.are.same(tostring(res), "UPDATE users SET name = 'Chico', sex = 'male'")
+    assert.are.esame(
+      tostring(res), "UPDATE users SET name = 'Chico', sex = 'male'",
+      "UPDATE users SET sex = 'male', name = 'Chico'"
+    )
   end)
 
   it('should update by id', function()
     res = update('users', {name='Camila', age=26}):where({id=1})
-    assert.are.same(
-      tostring(res), "UPDATE users SET name = 'Camila', age = 26 WHERE id = 1")
+    assert.are.esame(
+      tostring(res), "UPDATE users SET name = 'Camila', age = 26 WHERE id = 1",
+      "UPDATE users SET age = 26, name = 'Camila' WHERE id = 1"
+    )
   end)
 
   it('...', function()
@@ -245,9 +259,11 @@ describe('sql update', function()
 
   it('.. --', function()
     res = update('users'):orReplace():set({type='music', category='rock'})
-    assert.are.same(
+    assert.are.esame(
       tostring(res),
-      "UPDATE OR REPLACE users SET type = 'music', category = 'rock'")
+      "UPDATE OR REPLACE users SET type = 'music', category = 'rock'",
+      "UPDATE OR REPLACE users SET category = 'rock', type = 'music'"
+    )
   end)
 end)
 
@@ -308,38 +324,51 @@ describe('sql delete', function()
   it('should generate a DELETE with using', function()
     assert.are.same(
       tostring(delete('user'):using('addr'):where('user.addr_fk', sql('addr.pk'))),
-      'DELETE FROM user USING address addr WHERE "user".addr_fk = addr.pk');
+      'DELETE FROM user USING address addr WHERE "user".addr_fk = addr.pk'
+    )
   end)
 end)
 
 describe('parameterized sql', function()
 
-  it('should generate for insert statements', function()
-    assert.params(insert('user', {first_name='Fred', last_name='Flintstone'}),
-      'INSERT INTO user (first_name, last_name) VALUES ($1, $2)',
-      {'Fred', 'Flintstone'})
+  it('should generate for insert statements #bla', function()
+    local result = insert('user', {first_name='Fred', last_name='Flintstone'}):toParams()
+
+    assert.are.esame(result.values, {'Fred', 'Flintstone'}, {'Flintstone', 'Fred'})
+    assert.are.esame(
+      result.text, 'INSERT INTO user (first_name, last_name) VALUES ($1, $2)',
+      'INSERT INTO user (last_name, first_name) VALUES ($1, $2)'
+    )
   end)
 
   it('should generate for UPDATEs', function()
-    assert.params(update('user', {first_name='Fred', last_name='Flintstone'}),
-      'UPDATE user SET first_name = $1, last_name = $2', {'Fred', 'Flintstone'})
+    local result = update('user', {first_name='Fred', last_name='Flintstone'}):toParams()
+
+    assert.are.esame(result.values, {'Fred', 'Flintstone'}, {'Flintstone', 'Fred'})
+    assert.are.esame(
+      result.text, 'UPDATE user SET first_name = $1, last_name = $2',
+      'UPDATE user SET last_name = $1, first_name = $2'
+    )
   end)
 
   it('should generate for WHERE clauses', function()
-    assert.params(select():from('user'):where({removed=0, name='Fred Flintstone'}),
-      'SELECT * FROM user WHERE removed = $1 AND name = $2',
-      {0, 'Fred Flintstone'})
+    local result = select():from('user'):where({removed=0, name='Fred Flintstone'}):toParams()
+
+    assert.are.esame(result.values, {0, 'Fred Flintstone'}, {'Fred Flintstone', 0})
+    assert.are.esame(
+      result.text, 'SELECT * FROM user WHERE removed = $1 AND name = $2',
+      'SELECT * FROM user WHERE name = $1 AND removed = $2'
+    )
   end)
 
-  it('should not escape single quotes in the values returned by toParams()',
-    function()
-    assert.params(update('user', {name="Muad'Dib"}),
-      'UPDATE user SET name = $1', {"Muad'Dib"})
+  it('should not escape single quotes in the values returned by toParams()', function ()
+    assert.params(update('user', {name="Muad'Dib"}), 'UPDATE user SET name = $1', {"Muad'Dib"})
   end)
 
-  it('should call .toString() on arrays in parameterized sql', function()
-    assert.params(update('user', {name={"Paul", "Muad'Dib"}}),
-      'UPDATE user SET name = $1', {"Paul,Muad'Dib"})
+  it('should call .toString() on arrays in parameterized sql', function ()
+    assert.params(
+      update('user', {name={"Paul", "Muad'Dib"}}), 'UPDATE user SET name = $1', {"Paul,Muad'Dib"}
+    )
   end)
 
   it('should call .toString() on arrays in non-parameterized sql', function()
@@ -350,18 +379,21 @@ describe('parameterized sql', function()
   end)
 
   it('should generate specified style params', function()
-    local result = insert('user', {first_name='Fred', last_name='Flintstone'})
-      :toParams({placeholder='?'})
-    assert.equal(
-        result.text, 'INSERT INTO user (first_name, last_name) VALUES (?1, ?2)'
-      )
-    assert.are.same(result.values, {'Fred', 'Flintstone'})
+    local result =
+      insert('user', {first_name='Fred', last_name='Flintstone'}):toParams({placeholder='?'})
+
+    assert.are.esame(result.values, {'Fred', 'Flintstone'}, {'Flintstone', 'Fred'})
+    assert.are.esame(
+      result.text, 'INSERT INTO user (first_name, last_name) VALUES (?1, ?2)',
+      'INSERT INTO user (last_name, first_name) VALUES (?1, ?2)'
+    )
   end)
 
   it('should properly parameterize subqueries params', function()
     assert.params(
       select(select('last_name'):from('user'):where({first_name='Fred'})),
-      'SELECT (SELECT last_name FROM user WHERE first_name = $1)', {'Fred'});
+      'SELECT (SELECT last_name FROM user WHERE first_name = $1)', {'Fred'}
+    )
   end)
 
   it('should properly parameterize subqueries in updates', function()
@@ -434,7 +466,7 @@ it('should handle unions', function()
     tostring(select():from('usr'):where({name='Roy'})
     :union(select():from('usr'):where({name='Moss'}))
     :union(select():from('usr'):where({name='The elders of the internet'}))),
-    "SELECT * FROM user usr WHERE name = 'Roy'" .. 
+    "SELECT * FROM user usr WHERE name = 'Roy'" ..
     " UNION SELECT * FROM user usr WHERE name = 'Moss'" ..
     " UNION SELECT * FROM user usr WHERE name = 'The elders of the internet'"
   )
@@ -449,12 +481,13 @@ it('should handle chained unions', function()
   )
 end)
 
-it('should handle chained unions with params', function() 
-  assert.params(
-    select():from('usr'):where({name='Roy'})
-    :union():select():from('usr'):where({name='Moss'}),
-    "SELECT * FROM user usr WHERE name = $1" ..
-    " UNION SELECT * FROM user usr WHERE name = $2", {'Roy', 'Moss'}
+it('should handle chained unions with params', function ()
+  local result =
+    select():from('usr'):where({name='Roy'}):union():select():from('usr'):where({name='Moss'}):toParams()
+
+  assert.are.esame(result.values, {'Roy', 'Moss'}, {'Moss', 'Roy'})
+  assert.are.esame(
+    result.text, "SELECT * FROM user usr WHERE name = $1 UNION SELECT * FROM user usr WHERE name = $2"
   )
 end)
 
@@ -900,12 +933,17 @@ describe('pseudo-views', function()
   it('should add namespaced WHERE criteria', function()
     ins.addView('activeUsers', select():from('usr'):join('psn')
       :where({['usr.active']=true, ['psn.active']=true}))
-    assert.are.same(
+    assert.are.esame(
       tostring(select():from('accounts'):joinView('activeUsers a_usr')),
+
       'SELECT * FROM accounts ' ..
       'INNER JOIN user a_usr ON accounts.usr_fk = a_usr.pk ' ..
       'INNER JOIN person a_usr_psn ON a_usr.psn_fk = a_usr_psn.pk ' ..
-      'WHERE a_usr.active = true AND a_usr_psn.active = true'
+      'WHERE a_usr.active = true AND a_usr_psn.active = true',
+
+      'SELECT * FROM accounts INNER JOIN user a_usr ON accounts.usr_fk = a_usr.pk ' ..
+      'INNER JOIN person a_usr_psn ON a_usr.psn_fk = a_usr_psn.pk WHERE a_usr_psn.active = true ' ..
+      'AND a_usr.active = true'
     )
   end)
 

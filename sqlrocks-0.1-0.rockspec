@@ -1,5 +1,5 @@
 package = "sqlrocks"
-version = "0.1"
+version = "0.1-0"
 
 description = {
   summary  = "Sqlrocks, transparent, schemaless library for building and composing SQL statements.",
@@ -10,10 +10,6 @@ description = {
 source = {
   url    = "git://github.com/simbiose/sqlrocks.git",
   branch = "v0.1"
-}
-
-dependencies = {
-  "lua >= 5.1, < 5.3"
 }
 
 build = {
